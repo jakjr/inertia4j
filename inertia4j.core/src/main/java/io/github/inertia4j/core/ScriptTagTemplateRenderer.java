@@ -5,6 +5,7 @@ import org.jspecify.annotations.NullMarked;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -22,7 +23,9 @@ import java.util.regex.Pattern;
  */
 @NullMarked
 public class ScriptTagTemplateRenderer implements TemplateRenderer {
-    private final Matcher templateMatcher;
+    private static final Pattern PLACEHOLDER = Pattern.compile("@PageObject@");
+
+    private final Supplier<String> templateSource;
 
     /**
      * Constructs a ScriptTagTemplateRenderer.
@@ -38,7 +41,26 @@ public class ScriptTagTemplateRenderer implements TemplateRenderer {
     ) throws TemplateRenderingException {
         String template = loadTemplate(templatePath);
 
-        this.templateMatcher = Pattern.compile("@PageObject@").matcher(template);
+        this.templateSource = () -> template;
+    }
+
+    private ScriptTagTemplateRenderer(Supplier<String> templateSource) {
+        this.templateSource = templateSource;
+    }
+
+    /**
+     * Creates a renderer whose template is resolved on every {@link #render(String)} call, instead
+     * of being read once from the classpath. This is what a development setup needs: the app shell
+     * is not a static build artifact but something produced on the fly (e.g. fetched from a Vite
+     * dev server, which injects its own HMR client into the HTML on each request), so it has to be
+     * re-resolved rather than cached at startup.
+     *
+     * @param templateSource supplies the raw HTML template, containing the
+     *                       <code>@PageObject@</code> placeholder.
+     * @return a renderer reading its template from {@code templateSource} on each render.
+     */
+    public static ScriptTagTemplateRenderer ofTemplateSource(Supplier<String> templateSource) {
+        return new ScriptTagTemplateRenderer(templateSource);
     }
 
     /**
@@ -51,7 +73,8 @@ public class ScriptTagTemplateRenderer implements TemplateRenderer {
     public String render(String pageObjectJson) {
         String safePageObjectJson = pageObjectJson.replace("/", "\\/");
 
-        return templateMatcher.replaceFirst(Matcher.quoteReplacement(safePageObjectJson));
+        return PLACEHOLDER.matcher(templateSource.get())
+            .replaceFirst(Matcher.quoteReplacement(safePageObjectJson));
     }
 
     /**
