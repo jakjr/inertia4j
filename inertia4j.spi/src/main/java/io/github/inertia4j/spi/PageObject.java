@@ -25,6 +25,7 @@ public class PageObject {
     private final Map<String, ScrollMetadata> scrollProps;
     private final Map<String, OnceMetadata> onceProps;
     private final Map<String, Object> flash;
+    private final List<String> sharedProps;
 
     /**
      * Constructs a new PageObject.
@@ -61,6 +62,17 @@ public class PageObject {
      *              page object outside {@code PropsResolver}. Empty when there is nothing flashed
      *              — a {@link PageObjectSerializer} is expected to omit the field entirely in that
      *              case, same as the other metadata fields above.
+     * @param sharedProps top-level keys of the props that came from the app-wide "shared data"
+     *                    mechanism (mirrors {@code Inertia::share()} in inertia-laravel,
+     *                    {@code inertia_share} in inertia-rails) rather than being passed by the
+     *                    page itself — the same list a {@link PageObjectSerializer} is expected to
+     *                    put under the wire field {@code sharedProps}, which the client uses to
+     *                    know what it may reuse instantly during navigation (instant visits).
+     *                    Unlike {@code flash}, these values are already merged into {@code props}
+     *                    by the caller before this constructor runs — this field is announcement
+     *                    metadata only, not a second copy of the data. Empty when nothing was
+     *                    shared — a {@link PageObjectSerializer} is expected to omit the field
+     *                    entirely in that case, same as the other metadata fields above.
      */
     public PageObject(
         String component,
@@ -74,7 +86,8 @@ public class PageObject {
         List<String> rescuedProps,
         Map<String, ScrollMetadata> scrollProps,
         Map<String, OnceMetadata> onceProps,
-        Map<String, Object> flash
+        Map<String, Object> flash,
+        List<String> sharedProps
     ) {
         this.component = component;
         this.props = props;
@@ -88,6 +101,7 @@ public class PageObject {
         this.scrollProps = scrollProps;
         this.onceProps = onceProps;
         this.flash = flash;
+        this.sharedProps = sharedProps;
     }
 
     /**
@@ -247,5 +261,17 @@ public class PageObject {
      */
     public Map<String, Object> getFlash() {
         return flash;
+    }
+
+    /**
+     * Gets the top-level keys of the props that came from the app-wide shared-data mechanism for
+     * this page, so the client can tell instant visits which props are already known/safe to
+     * reuse without waiting for the server.
+     *
+     * @return shared prop keys; empty when nothing was shared.
+     * @see <a href="https://inertiajs.com/the-protocol#shared-data">Inertia shared data</a>
+     */
+    public List<String> getSharedProps() {
+        return sharedProps;
     }
 }

@@ -26,7 +26,7 @@ public class JacksonPageObjectSerializer implements PageObjectSerializer {
      */
     private static final List<String> OMIT_WHEN_EMPTY = List.of(
         "deferredProps", "mergeProps", "prependProps", "deepMergeProps", "matchPropsOn",
-        "rescuedProps", "scrollProps", "onceProps", "flash"
+        "rescuedProps", "scrollProps", "onceProps", "flash", "sharedProps"
     );
 
     /**
@@ -37,8 +37,8 @@ public class JacksonPageObjectSerializer implements PageObjectSerializer {
      */
     @JsonPropertyOrder({
         "component", "props", "url", "version", "encryptHistory", "clearHistory", "flash",
-        "deferredProps", "mergeProps", "prependProps", "deepMergeProps", "matchPropsOn",
-        "rescuedProps", "scrollProps", "onceProps"
+        "sharedProps", "deferredProps", "mergeProps", "prependProps", "deepMergeProps",
+        "matchPropsOn", "rescuedProps", "scrollProps", "onceProps"
     })
     private interface PageObjectPropertyOrder {
     }
