@@ -984,6 +984,50 @@ public class InertiaRendererTest {
         assertThrows(UnsupportedOperationException.class, prop::once);
     }
 
+    @Test
+    void render_withoutFlash_omitsFlashField() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", null);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withFlash_includesFlashField_outsideProps() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("tarefas", List.of("Comprar leite"));
+        Map<String, Object> flash = Map.of("success", "Tarefa criada!");
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props, flash);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"tarefas\":[\"Comprar leite\"]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"flash\":{\"success\":\"Tarefa criada!\"}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withFlash_onPartialReload_isStillIncluded() {
+        // resolveFlashData() no inertia-laravel real e chamado incondicionalmente em
+        // toResponse(), nunca passando por PropsResolver - flash nao e filtrado por
+        // X-Inertia-Partial-Data/Except, ao contrario de props normais.
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "outraProp"
+        ));
+        Map<String, Object> props = Map.of("outraProp", "valor", "naoPedida", "ignorada");
+        Map<String, Object> flash = Map.of("erro", "Algo deu errado");
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props, flash);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"outraProp\":\"valor\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"flash\":{\"erro\":\"Algo deu errado\"}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
     private HttpResponse render(HttpRequest request, InertiaRenderingOptions options) {
         return new InertiaRenderer(
             pageObjectSerializer,

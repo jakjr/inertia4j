@@ -32,7 +32,7 @@ tasks.test {
 }
 
 group = "io.github.inertia4j"
-version = "1.1.0"
+version = "1.2.0-jakjr.1"
 
 configure<PublishingExtension> {
     publications {

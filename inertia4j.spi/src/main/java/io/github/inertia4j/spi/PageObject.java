@@ -24,6 +24,7 @@ public class PageObject {
     private final List<String> rescuedProps;
     private final Map<String, ScrollMetadata> scrollProps;
     private final Map<String, OnceMetadata> onceProps;
+    private final Map<String, Object> flash;
 
     /**
      * Constructs a new PageObject.
@@ -53,6 +54,13 @@ public class PageObject {
      * @param onceProps once-cached props on this page, keyed by their (custom or default) cache
      *                  key. Empty when none — a {@link PageObjectSerializer} is expected to omit
      *                  the field entirely in that case.
+     * @param flash one-shot flash data (e.g. a toast message queued server-side), keyed by
+     *              caller-chosen name. Unlike {@code props}, this is never resolved recursively or
+     *              filtered by a partial reload — it mirrors {@code Inertia::flash()}/
+     *              {@code resolveFlashData()} in inertia-laravel, which merge it straight into the
+     *              page object outside {@code PropsResolver}. Empty when there is nothing flashed
+     *              — a {@link PageObjectSerializer} is expected to omit the field entirely in that
+     *              case, same as the other metadata fields above.
      */
     public PageObject(
         String component,
@@ -65,7 +73,8 @@ public class PageObject {
         MergeInstructions mergeInstructions,
         List<String> rescuedProps,
         Map<String, ScrollMetadata> scrollProps,
-        Map<String, OnceMetadata> onceProps
+        Map<String, OnceMetadata> onceProps,
+        Map<String, Object> flash
     ) {
         this.component = component;
         this.props = props;
@@ -78,6 +87,7 @@ public class PageObject {
         this.rescuedProps = rescuedProps;
         this.scrollProps = scrollProps;
         this.onceProps = onceProps;
+        this.flash = flash;
     }
 
     /**
@@ -227,5 +237,15 @@ public class PageObject {
      */
     public Map<String, OnceMetadata> getOnceProps() {
         return onceProps;
+    }
+
+    /**
+     * Gets the one-shot flash data queued for this response (e.g. a toast message), keyed by
+     * caller-chosen name.
+     *
+     * @return flash data by key; empty when nothing was flashed.
+     */
+    public Map<String, Object> getFlash() {
+        return flash;
     }
 }

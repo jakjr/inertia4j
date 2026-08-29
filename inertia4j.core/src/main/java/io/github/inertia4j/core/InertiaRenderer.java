@@ -212,7 +212,8 @@ public class InertiaRenderer {
             new MergeInstructions(ctx.mergeProps, ctx.prependProps, ctx.deepMergeProps, ctx.matchPropsOn),
             ctx.rescuedProps,
             ctx.scrollProps,
-            ctx.onceProps
+            ctx.onceProps,
+            options.flash != null ? options.flash : Map.of()
         );
     }
 
