@@ -1,5 +1,6 @@
 package io.github.inertia4j.core;
 
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -23,15 +24,31 @@ public class JacksonPageObjectSerializer implements PageObjectSerializer {
      * not present-but-empty — when there is nothing to report for this page.
      */
     private static final List<String> OMIT_WHEN_EMPTY = List.of(
-        "deferredProps", "mergeProps", "prependProps", "deepMergeProps", "matchPropsOn", "rescuedProps"
+        "deferredProps", "mergeProps", "prependProps", "deepMergeProps", "matchPropsOn",
+        "rescuedProps", "onceProps"
     );
+
+    /**
+     * Pins {@link PageObject}'s JSON field order deterministically. Without this, Jackson's
+     * reflection-based POJO introspection has no ordering guarantee beyond "usually, but not
+     * reliably, declaration order" — a mixin (rather than an annotation on {@link PageObject}
+     * itself) keeps {@code inertia4j.spi} free of a Jackson dependency.
+     */
+    @JsonPropertyOrder({
+        "component", "props", "url", "version", "encryptHistory", "clearHistory",
+        "deferredProps", "mergeProps", "prependProps", "deepMergeProps", "matchPropsOn",
+        "rescuedProps", "onceProps"
+    })
+    private interface PageObjectPropertyOrder {
+    }
 
     /**
      * The Jackson ObjectMapper instance used for serialization.
      * Configured to order map entries by keys for consistent output.
      */
     private final ObjectMapper objectMapper = new ObjectMapper()
-        .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
+        .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true)
+        .addMixIn(PageObject.class, PageObjectPropertyOrder.class);
 
     /**
      * {@inheritDoc}

@@ -9,6 +9,11 @@ package io.github.inertia4j.core.props;
  */
 public interface Deferrable {
     /**
+     * @return whether this prop should actually be deferred.
+     */
+    boolean shouldDefer();
+
+    /**
      * The request group this prop is fetched together with. Props deferred with the same group
      * name are resolved in a single follow-up partial reload; different groups get separate
      * (parallel) reloads.

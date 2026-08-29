@@ -20,6 +20,14 @@ public interface Mergeable {
     }
 
     /**
+     * @return whether this prop should actually be merged. A type can implement {@code Mergeable}
+     *         without every instance opting in (e.g. a {@code DeferProp} that never called
+     *         {@code .merge()}) — {@link io.github.inertia4j.core.InertiaRenderer} only treats it
+     *         as mergeable when this is {@code true}.
+     */
+    boolean shouldMerge();
+
+    /**
      * @return the merge strategy for this prop.
      */
     Strategy getMergeStrategy();

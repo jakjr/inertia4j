@@ -1,11 +1,12 @@
 package io.github.inertia4j.core.props;
 
-import java.util.List;
 import java.util.function.Supplier;
 
 /**
  * Wraps a prop value that should load in a follow-up request instead of the initial page visit —
  * the Java equivalent of Laravel's {@code Inertia::defer()} / Rails' {@code InertiaRails.defer}.
+ * Also merge-, once-, and rescue-able (see {@link AbstractProp}, {@link #rescue()}): a paginated
+ * list can both load lazily <em>and</em> grow as the user scrolls, for instance.
  *
  * <pre>{@code
  * Map.of(
@@ -16,11 +17,10 @@ import java.util.function.Supplier;
  *
  * @see <a href="https://inertiajs.com/deferred-props">Inertia deferred props</a>
  */
-public class DeferProp implements ResolvableProp, Deferrable, Rescuable {
+public class DeferProp extends AbstractProp<DeferProp> implements Deferrable, Rescuable {
 
     private static final String DEFAULT_GROUP = "default";
 
-    private final Supplier<Object> callback;
     private final String group;
     private final boolean rescue;
 
@@ -41,18 +41,23 @@ public class DeferProp implements ResolvableProp, Deferrable, Rescuable {
      * @param group    the request group name.
      */
     public DeferProp(Supplier<Object> callback, String group) {
-        this(callback, group, false);
+        this(callback, group, PropState.DEFAULT, false);
     }
 
-    private DeferProp(Supplier<Object> callback, String group, boolean rescue) {
-        this.callback = callback;
+    private DeferProp(Supplier<Object> callback, String group, PropState state, boolean rescue) {
+        super(callback, state);
         this.group = group;
         this.rescue = rescue;
     }
 
     @Override
-    public Object resolve() {
-        return callback.get();
+    DeferProp withState(PropState newState) {
+        return new DeferProp(callback, group, newState, rescue);
+    }
+
+    @Override
+    public boolean shouldDefer() {
+        return true;
     }
 
     @Override
@@ -74,28 +79,6 @@ public class DeferProp implements ResolvableProp, Deferrable, Rescuable {
      * @return this deferred prop, rescued on failure.
      */
     public DeferProp rescue() {
-        return new DeferProp(callback, group, true);
-    }
-
-    /**
-     * @return this deferred prop, also merged by appending once resolved.
-     * @see <a href="https://inertiajs.com/merging-props#combining-with-deferred-props">Inertia — combining merge with deferred props</a>
-     */
-    public MergeableDeferProp merge() {
-        return new MergeableDeferProp(this, Mergeable.Strategy.APPEND, List.of());
-    }
-
-    /**
-     * @return this deferred prop, also merged by prepending once resolved.
-     */
-    public MergeableDeferProp prepend() {
-        return new MergeableDeferProp(this, Mergeable.Strategy.PREPEND, List.of());
-    }
-
-    /**
-     * @return this deferred prop, also deep-merged once resolved.
-     */
-    public MergeableDeferProp deepMerge() {
-        return new MergeableDeferProp(this, Mergeable.Strategy.DEEP, List.of());
+        return new DeferProp(callback, group, state, true);
     }
 }

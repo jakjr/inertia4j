@@ -22,6 +22,7 @@ public class PageObject {
     private final Map<String, List<String>> deferredProps;
     private final MergeInstructions mergeInstructions;
     private final List<String> rescuedProps;
+    private final Map<String, OnceMetadata> onceProps;
 
     /**
      * Constructs a new PageObject.
@@ -44,6 +45,9 @@ public class PageObject {
      * @param rescuedProps keys of props whose resolution threw and was swallowed. Empty when none
      *                     — a {@link PageObjectSerializer} is expected to omit the field entirely
      *                     in that case.
+     * @param onceProps once-cached props on this page, keyed by their (custom or default) cache
+     *                  key. Empty when none — a {@link PageObjectSerializer} is expected to omit
+     *                  the field entirely in that case.
      */
     public PageObject(
         String component,
@@ -54,7 +58,8 @@ public class PageObject {
         Object version,
         Map<String, List<String>> deferredProps,
         MergeInstructions mergeInstructions,
-        List<String> rescuedProps
+        List<String> rescuedProps,
+        Map<String, OnceMetadata> onceProps
     ) {
         this.component = component;
         this.props = props;
@@ -65,6 +70,7 @@ public class PageObject {
         this.deferredProps = deferredProps;
         this.mergeInstructions = mergeInstructions;
         this.rescuedProps = rescuedProps;
+        this.onceProps = onceProps;
     }
 
     /**
@@ -189,5 +195,17 @@ public class PageObject {
      */
     public List<String> getRescuedProps() {
         return rescuedProps;
+    }
+
+    /**
+     * Gets the once-cached props announced for this page, keyed by their (custom or default)
+     * cache key — so the client knows which key to send back via
+     * {@code X-Inertia-Except-Once-Props} once it has a fresh copy.
+     *
+     * @return once-prop metadata by cache key; empty when none.
+     * @see <a href="https://inertiajs.com/once-props">Inertia once props</a>
+     */
+    public Map<String, OnceMetadata> getOnceProps() {
+        return onceProps;
     }
 }

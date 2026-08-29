@@ -1,6 +1,7 @@
 import io.github.inertia4j.core.*;
 import io.github.inertia4j.core.props.DeferProp;
 import io.github.inertia4j.core.props.MergeProp;
+import io.github.inertia4j.core.props.OnceProp;
 import io.github.inertia4j.spi.PageObjectSerializer;
 import org.junit.jupiter.api.Test;
 
@@ -13,6 +14,7 @@ import java.util.function.Supplier;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class InertiaRendererTest {
     private final PageObjectSerializer pageObjectSerializer = new DefaultPageObjectSerializer();
@@ -381,6 +383,119 @@ public class InertiaRendererTest {
         // O X-Inertia-Partial-Component pedido nao bate com o componente atual: tratado como
         // full visit (only-list "user" e ignorado, "comments" ainda vira deferredProps).
         var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"deferredProps\":{\"default\":[\"comments\"]}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOnceProp_announcesMetadataAndIncludesValueOnFirstLoad() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("planos", new OnceProp(() -> List.of("Basico")));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"planos\":[\"Basico\"]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"onceProps\":{\"planos\":{\"prop\":\"planos\",\"expiresAt\":null}}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOnceProp_clientAlreadyHasIt_excludesValueButStillAnnouncesMetadata() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Except-Once-Props", "planos"
+        ));
+        Map<String, Object> props = Map.of(
+            "planos", new OnceProp(() -> {
+                throw new AssertionError("nao deveria resolver, cliente ja avisou que tem");
+            })
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"onceProps\":{\"planos\":{\"prop\":\"planos\",\"expiresAt\":null}}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOnceProp_customKeyViaAs_excludedByCustomKeyNotPath() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Except-Once-Props", "paises"
+        ));
+        Map<String, Object> props = Map.of(
+            "countries", new OnceProp(() -> {
+                throw new AssertionError("nao deveria resolver");
+            }).as("paises")
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // onceProps fica keyed pela chave customizada ("paises"), nao pelo path ("countries") —
+        // e e essa chave customizada que o except-once header precisa citar pra excluir.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"onceProps\":{\"paises\":{\"prop\":\"countries\",\"expiresAt\":null}}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOnceProp_fresh_alwaysResolvesEvenIfClientClaimsCached() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Except-Once-Props", "planos"
+        ));
+        Map<String, Object> props = Map.of("planos", new OnceProp(() -> List.of("Basico")).fresh());
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"planos\":[\"Basico\"]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"onceProps\":{\"planos\":{\"prop\":\"planos\",\"expiresAt\":null}}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOnceProp_until_setsExpiresAt() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("planos", new OnceProp(() -> List.of("Basico")).until(86_400_000L));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        String body = response.getBody();
+        assertTrue(body.contains("\"onceProps\":{\"planos\":{\"prop\":\"planos\",\"expiresAt\":"));
+        assertFalse(body.contains("\"expiresAt\":null"));
+    }
+
+    @Test
+    void render_withDeferredOnceProp_alreadyLoaded_notAnnouncedAsDeferred() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Except-Once-Props", "comentarios"
+        ));
+        Map<String, Object> props = Map.of(
+            "comentarios", new DeferProp(() -> {
+                throw new AssertionError("nao deveria resolver nem ser anunciado como deferred");
+            }).once()
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // Nao aparece em deferredProps (cliente ja tem copia valida) mas ainda aparece em
+        // onceProps, pra o cache do cliente continuar sabendo da chave/expiracao.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"onceProps\":{\"comentarios\":{\"prop\":\"comentarios\",\"expiresAt\":null}}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withMergeableOnceProp_bothMetadataPresent() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("posts", new MergeProp(List.of("Post 1")).once());
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"posts\":[\"Post 1\"]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"mergeProps\":[\"posts\"],\"onceProps\":{\"posts\":{\"prop\":\"posts\",\"expiresAt\":null}}}";
         assertEquals(expectedJson, response.getBody());
     }
 

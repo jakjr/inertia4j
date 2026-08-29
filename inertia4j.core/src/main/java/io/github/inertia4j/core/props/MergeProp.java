@@ -1,12 +1,12 @@
 package io.github.inertia4j.core.props;
 
-import java.util.Arrays;
-import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * Wraps a prop value that the client should merge into its existing value on a partial reload,
  * instead of replacing it — the Java equivalent of Laravel's {@code Inertia::merge()} / Rails'
- * {@code InertiaRails.merge}. Appends by default.
+ * {@code InertiaRails.merge}. Appends by default. Also once-able (see {@link AbstractProp}): a
+ * merged list can be cached client-side too.
  *
  * <pre>{@code
  * // Novos posts sao acrescentados aos que o cliente ja tem, casando por "id" pra
@@ -16,11 +16,7 @@ import java.util.List;
  *
  * @see <a href="https://inertiajs.com/merging-props">Inertia merging props</a>
  */
-public class MergeProp implements ResolvableProp, Mergeable {
-
-    private final Object value;
-    private final Strategy strategy;
-    private final List<String> matchOn;
+public class MergeProp extends AbstractProp<MergeProp> {
 
     /**
      * Wraps {@code value} to be appended into the client's existing value for this prop.
@@ -28,53 +24,15 @@ public class MergeProp implements ResolvableProp, Mergeable {
      * @param value the (already computed) value for this response.
      */
     public MergeProp(Object value) {
-        this(value, Strategy.APPEND, List.of());
+        this(() -> value, PropState.DEFAULT.withMerge(Strategy.APPEND));
     }
 
-    private MergeProp(Object value, Strategy strategy, List<String> matchOn) {
-        this.value = value;
-        this.strategy = strategy;
-        this.matchOn = matchOn;
-    }
-
-    @Override
-    public Object resolve() {
-        return value;
+    private MergeProp(Supplier<Object> callback, PropState state) {
+        super(callback, state);
     }
 
     @Override
-    public Strategy getMergeStrategy() {
-        return strategy;
-    }
-
-    @Override
-    public List<String> getMatchOn() {
-        return matchOn;
-    }
-
-    /**
-     * @return an equivalent prop merged by prepending instead of appending.
-     */
-    public MergeProp prepend() {
-        return new MergeProp(value, Strategy.PREPEND, matchOn);
-    }
-
-    /**
-     * @return an equivalent prop merged by deep-merging its whole structure instead of
-     *         appending/prepending array items.
-     */
-    public MergeProp deepMerge() {
-        return new MergeProp(value, Strategy.DEEP, matchOn);
-    }
-
-    /**
-     * Matches existing items on {@code paths} instead of appending/prepending duplicates.
-     *
-     * @param paths one or more paths relative to this prop's own value (e.g. {@code "id"}, or
-     *              {@code "data.id"} for an array nested one level deep).
-     * @return an equivalent prop that matches items on {@code paths}.
-     */
-    public MergeProp matchOn(String... paths) {
-        return new MergeProp(value, strategy, Arrays.asList(paths));
+    MergeProp withState(PropState newState) {
+        return new MergeProp(callback, newState);
     }
 }

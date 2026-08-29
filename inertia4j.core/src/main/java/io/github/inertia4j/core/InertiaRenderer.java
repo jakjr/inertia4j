@@ -2,9 +2,11 @@ package io.github.inertia4j.core;
 
 import io.github.inertia4j.core.props.Deferrable;
 import io.github.inertia4j.core.props.Mergeable;
+import io.github.inertia4j.core.props.Onceable;
 import io.github.inertia4j.core.props.Rescuable;
 import io.github.inertia4j.core.props.ResolvableProp;
 import io.github.inertia4j.spi.MergeInstructions;
+import io.github.inertia4j.spi.OnceMetadata;
 import io.github.inertia4j.spi.PageObject;
 import io.github.inertia4j.spi.PageObjectSerializer;
 import io.github.inertia4j.spi.SerializationException;
@@ -177,7 +179,7 @@ public class InertiaRenderer {
     /**
      * Creates a {@link PageObject} instance from the provided rendering options, resolving props
      * according to the partial-reload filter and {@link Deferrable}/{@link ResolvableProp}/
-     * {@link Mergeable}/{@link Rescuable} semantics (see {@link #resolveProps}).
+     * {@link Mergeable}/{@link Onceable}/{@link Rescuable} semantics (see {@link #resolveProps}).
      *
      * @param request The incoming HTTP request.
      * @param options The rendering options.
@@ -197,7 +199,8 @@ public class InertiaRenderer {
             versionProvider.get(),
             ctx.deferredProps,
             new MergeInstructions(ctx.mergeProps, ctx.prependProps, ctx.deepMergeProps, ctx.matchPropsOn),
-            ctx.rescuedProps
+            ctx.rescuedProps,
+            ctx.onceProps
         );
     }
 
@@ -216,9 +219,11 @@ public class InertiaRenderer {
      */
     private static final class ResolutionContext {
         final boolean isPartial;
+        final boolean isInertiaRequest;
         final List<String> onlyPaths;
         final List<String> exceptPaths;
         final List<String> resetPaths;
+        final List<String> exceptOncePaths;
 
         final Map<String, List<String>> deferredProps = new LinkedHashMap<>();
         final List<String> mergeProps = new ArrayList<>();
@@ -226,14 +231,18 @@ public class InertiaRenderer {
         final List<String> deepMergeProps = new ArrayList<>();
         final List<String> matchPropsOn = new ArrayList<>();
         final List<String> rescuedProps = new ArrayList<>();
+        final Map<String, OnceMetadata> onceProps = new LinkedHashMap<>();
 
         ResolutionContext(HttpRequest request, String componentName) {
             String partialComponentHeader = request.getHeader("X-Inertia-Partial-Component");
             this.isPartial = partialComponentHeader != null && partialComponentHeader.equals(componentName);
+            this.isInertiaRequest = "true".equalsIgnoreCase(request.getHeader("X-Inertia"));
             this.onlyPaths = parseCsvHeader(request, "X-Inertia-Partial-Data");
             this.exceptPaths = parseCsvHeader(request, "X-Inertia-Partial-Except");
             List<String> reset = parseCsvHeader(request, "X-Inertia-Reset");
             this.resetPaths = reset != null ? reset : List.of();
+            List<String> exceptOnce = parseCsvHeader(request, "X-Inertia-Except-Once-Props");
+            this.exceptOncePaths = exceptOnce != null ? exceptOnce : List.of();
         }
     }
 
@@ -274,16 +283,35 @@ public class InertiaRenderer {
                 continue;
             }
 
-            // Full visit only: a Deferrable prop is never resolved now, only announced (and, if
-            // it is also Mergeable, its merge instructions are announced too, so the client
-            // already knows how to fold in the value once it fetches it later).
-            if (!ctx.isPartial && prop instanceof Deferrable) {
-                String group = ((Deferrable) prop).getGroup();
-                ctx.deferredProps.computeIfAbsent(group, g -> new ArrayList<>()).add(path);
-                if (prop instanceof Mergeable) {
-                    recordMergeInstructions(path, (Mergeable) prop, ctx);
+            // Full visit only (mirrors excludeFromInitialResponse: only ever consulted when
+            // !isPartial — a client explicitly asking for a prop again via a partial reload
+            // gets it resolved fresh regardless of any cached copy it claims to have).
+            if (!ctx.isPartial) {
+                // A Deferrable prop is never resolved now, only announced — unless the client
+                // already has a fresh once-cached copy, in which case it isn't even announced
+                // (nothing to fetch: the client already has what it needs).
+                if (prop instanceof Deferrable && ((Deferrable) prop).shouldDefer()) {
+                    if (!wasAlreadyLoadedByClient(prop, path, ctx)) {
+                        String group = ((Deferrable) prop).getGroup();
+                        ctx.deferredProps.computeIfAbsent(group, g -> new ArrayList<>()).add(path);
+                    }
+                    if (prop instanceof Mergeable) {
+                        recordMergeInstructions(path, (Mergeable) prop, ctx);
+                    }
+                    if (prop instanceof Onceable) {
+                        recordOnceMetadata(path, (Onceable) prop, ctx);
+                    }
+                    continue;
                 }
-                continue;
+                // Not deferred, but the client already has a fresh once-cached copy: skip
+                // resolving it (still announced under onceProps so the client's cache entry
+                // survives, matching the expiry/key it was given the first time).
+                if (ctx.isInertiaRequest && wasAlreadyLoadedByClient(prop, path, ctx)) {
+                    if (prop instanceof Onceable) {
+                        recordOnceMetadata(path, (Onceable) prop, ctx);
+                    }
+                    continue;
+                }
             }
 
             boolean shouldRescue = prop instanceof Rescuable && ((Rescuable) prop).shouldRescue();
@@ -300,6 +328,9 @@ public class InertiaRenderer {
 
             if (prop instanceof Mergeable) {
                 recordMergeInstructions(path, (Mergeable) prop, ctx);
+            }
+            if (prop instanceof Onceable) {
+                recordOnceMetadata(path, (Onceable) prop, ctx);
             }
 
             if (value instanceof Map) {
@@ -362,6 +393,9 @@ public class InertiaRenderer {
     }
 
     private static void recordMergeInstructions(String path, Mergeable mergeable, ResolutionContext ctx) {
+        if (!mergeable.shouldMerge()) {
+            return;
+        }
         if (ctx.resetPaths.contains(path)) {
             return;
         }
@@ -382,6 +416,40 @@ public class InertiaRenderer {
         for (String relativePath : mergeable.getMatchOn()) {
             ctx.matchPropsOn.add(path + "." + relativePath);
         }
+    }
+
+    /**
+     * Mirrors {@code wasAlreadyLoadedByClient()}: {@code prop} is a once prop, not forced fresh,
+     * and the client already announced (via {@code X-Inertia-Except-Once-Props}) that it has a
+     * valid cached copy — keyed by its custom {@link Onceable#getKey()} if it set one, its path
+     * otherwise.
+     */
+    private static boolean wasAlreadyLoadedByClient(Object prop, String path, ResolutionContext ctx) {
+        if (!(prop instanceof Onceable)) {
+            return false;
+        }
+        Onceable onceable = (Onceable) prop;
+        if (!onceable.shouldResolveOnce() || onceable.shouldBeRefreshed()) {
+            return false;
+        }
+        String key = onceable.getKey() != null ? onceable.getKey() : path;
+        return ctx.exceptOncePaths.contains(key);
+    }
+
+    /**
+     * Mirrors {@code collectOnceMetadata()}: announces {@code prop} under {@code onceProps},
+     * keyed the same way {@link #wasAlreadyLoadedByClient} looks it up, so a later request can
+     * reference it back — regardless of whether the value itself was included this response.
+     */
+    private static void recordOnceMetadata(String path, Onceable onceable, ResolutionContext ctx) {
+        if (!onceable.shouldResolveOnce()) {
+            return;
+        }
+        if (ctx.isPartial && !isIncludedInPartialMetadata(path, ctx)) {
+            return;
+        }
+        String key = onceable.getKey() != null ? onceable.getKey() : path;
+        ctx.onceProps.put(key, new OnceMetadata(path, onceable.getExpiresAtMillis()));
     }
 
     private static Object resolveIfNeeded(Object value) {
