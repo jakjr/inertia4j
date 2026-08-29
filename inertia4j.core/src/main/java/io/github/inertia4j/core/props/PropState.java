@@ -4,9 +4,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The merge/once facets shared by every {@link AbstractProp} leaf — split out of the leaf classes
- * themselves so {@link AbstractProp}'s fluent methods can rebuild an immutable copy-on-write
- * instance without each leaf having to know about every other leaf's fields.
+ * The once facet shared by every {@link AbstractOnceProp} leaf, plus the merge facet on top for
+ * the {@link AbstractProp} leaves that also compose it — split out of the leaf classes themselves
+ * so their fluent methods can rebuild an immutable copy-on-write instance without each leaf having
+ * to know about every other leaf's fields. A leaf that only extends {@link AbstractOnceProp}
+ * (e.g. {@link OnceProp}, {@link OptionalProp}) simply never touches this class's merge-related
+ * fields, which stay at their {@link #DEFAULT} values.
  */
 final class PropState {
     static final PropState DEFAULT = new PropState(

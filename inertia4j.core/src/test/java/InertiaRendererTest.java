@@ -857,6 +857,133 @@ public class InertiaRendererTest {
         assertEquals(expectedJson, response.getBody());
     }
 
+    @Test
+    void render_withOptionalOnceProp_clientAlreadyClaimsCache_stillAnnouncesOnceMetadataUnconditionally() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Except-Once-Props", "relatorio"
+        ));
+        Map<String, Object> props = Map.of(
+            "relatorio", new OptionalProp(() -> {
+                throw new AssertionError("optional prop nao deveria resolver num full visit");
+            }).once()
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // O branch de OptionalProp no full visit nunca consulta wasAlreadyLoadedByClient() antes
+        // de anunciar onceProps (mirror do excludeIgnoredProp() real: so a entrada em
+        // deferredProps e condicionada a isso, o once e incondicional). Presente ou nao o header
+        // X-Inertia-Except-Once-Props, o resultado e o mesmo — e exatamente esse "nao muda nada"
+        // que este teste fixa: uma "otimizacao" tentadora de so anunciar once quando o cliente
+        // ainda nao tem cache quebraria isso.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"onceProps\":{\"relatorio\":{\"prop\":\"relatorio\",\"expiresAt\":null}}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withAlwaysProp_nestedUnderFilteredOutParent_isDroppedEntirely() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "user"
+        ));
+        Map<String, Object> layout = new LinkedHashMap<>();
+        layout.put("flash", new AlwaysProp(() -> {
+            throw new AssertionError("nao deveria resolver - o pai 'layout' nem e alcancado");
+        }));
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("user", "test");
+        props.put("layout", layout);
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // O bypass do AlwaysProp e por-prop, nao por-subarvore: "layout" em si nao bate nem leva
+        // a "user" (o only-list), entao a recursao nunca chega no filho AlwaysProp pra sequer
+        // considerar o bypass — mirror exato de shouldIncludeInPartialResponse()/keep_prop? reais,
+        // que so consultam o class-check depois de a propria entrada ja estar sendo visitada.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withAlwaysProp_nestedUnderReachableParent_bypassesFilterAtDepth() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "layout.outro"
+        ));
+        Map<String, Object> layout = new LinkedHashMap<>();
+        layout.put("flash", new AlwaysProp(() -> "mensagem"));
+        layout.put("titulo", "Feed"); // prop comum, nao pedida - deve sumir
+        layout.put("outro", "valor");
+        Map<String, Object> props = Map.of("layout", layout);
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // "layout" sobrevive so pra recursao alcancar "layout.outro" (leadsToPath); dentro dele,
+        // "layout.flash" aparece mesmo sem ser o alvo do only (bypass do AlwaysProp funciona a
+        // qualquer profundidade), mas "layout.titulo" some normalmente por nao estar no only-list.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"layout\":{\"flash\":\"mensagem\",\"outro\":\"valor\"}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOptionalPropInsideNestedMap_onFullVisit_isExcluded() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> layout = new LinkedHashMap<>();
+        layout.put("titulo", "Feed");
+        layout.put("relatorio", new OptionalProp(() -> {
+            throw new AssertionError("optional prop aninhado num map nao deveria resolver");
+        }));
+        Map<String, Object> props = Map.of("layout", layout);
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"layout\":{\"titulo\":\"Feed\"}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOptionalPropInsideList_onFullVisit_isExcludedAndListCompacts() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "widgets", List.of(
+                "a",
+                new OptionalProp(() -> {
+                    throw new AssertionError("optional prop aninhado numa lista nao deveria resolver");
+                }),
+                "c"
+            )
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // Diferente de um DeferProp aninhado numa lista (que ainda e anunciado, so por indice, em
+        // deferredProps), um OptionalProp exclui o item por completo - a lista so compacta os que
+        // sobraram, sem deixar buraco/indice pulado.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"widgets\":[\"a\",\"c\"]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withScrollProp_once_throwsUnsupportedOperationException() {
+        var prop = new ScrollProp(
+            () -> Map.of("data", List.of("Post 1")),
+            ScrollPage.numbered("pagina", 1, false)
+        );
+
+        // Real ScrollProp.php/scroll_prop.rb nunca implementam Onceable - cachear uma pagina de
+        // scroll faria o cliente parar de pedir scrollProps/mergeProps pra ela, travando o scroll
+        // infinito em silencio. Bloqueado no unico ponto de entrada que poderia ligar isso.
+        assertThrows(UnsupportedOperationException.class, prop::once);
+    }
+
     private HttpResponse render(HttpRequest request, InertiaRenderingOptions options) {
         return new InertiaRenderer(
             pageObjectSerializer,

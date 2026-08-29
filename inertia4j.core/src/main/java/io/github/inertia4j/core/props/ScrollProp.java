@@ -110,6 +110,43 @@ public class ScrollProp extends AbstractProp<ScrollProp> implements Deferrable {
     }
 
     /**
+     * Real {@code ScrollProp.php}/{@code scroll_prop.rb} are {@code Deferrable}/{@code Mergeable}
+     * only — never {@code Onceable} — so the once facet {@link AbstractProp} inherits from
+     * {@link AbstractOnceProp} has no upstream equivalent here. Left reachable, caching a scroll
+     * prop's page under {@code onceProps} would make the client skip a later request for it
+     * entirely — silently dropping its {@code scrollProps} cursor and stranding the infinite
+     * scroll with no cue to paginate further. Blocked at the one entry point that could ever set
+     * {@code state.once}, rather than restructuring the shared base for this single leaf.
+     *
+     * @throws UnsupportedOperationException always.
+     */
+    @Override
+    public ScrollProp once() {
+        throw new UnsupportedOperationException(
+            "ScrollProp nao pode ser once() - cachear uma pagina de scroll faria o cliente parar " +
+            "de pedir scrollProps/mergeProps para ela, travando o scroll infinito em silencio."
+        );
+    }
+
+    /** @throws UnsupportedOperationException always — see {@link #once()}. */
+    @Override
+    public ScrollProp as(String key) {
+        throw new UnsupportedOperationException("ScrollProp nao pode ser once() - ver ScrollProp#once().");
+    }
+
+    /** @throws UnsupportedOperationException always — see {@link #once()}. */
+    @Override
+    public ScrollProp until(long ttlMillis) {
+        throw new UnsupportedOperationException("ScrollProp nao pode ser once() - ver ScrollProp#once().");
+    }
+
+    /** @throws UnsupportedOperationException always — see {@link #once()}. */
+    @Override
+    public ScrollProp fresh() {
+        throw new UnsupportedOperationException("ScrollProp nao pode ser once() - ver ScrollProp#once().");
+    }
+
+    /**
      * Skips this prop on the initial page load, letting the client fetch the first page in a
      * follow-up request — the same opt-in {@code ScrollProp} gets from Laravel's
      * {@code DefersProps} trait (unlike {@link DeferProp}, a scroll prop is <em>not</em> deferred
