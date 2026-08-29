@@ -20,6 +20,8 @@ public class PageObject {
     private final boolean encryptHistory;
     private final boolean clearHistory;
     private final Map<String, List<String>> deferredProps;
+    private final MergeInstructions mergeInstructions;
+    private final List<String> rescuedProps;
 
     /**
      * Constructs a new PageObject.
@@ -34,6 +36,14 @@ public class PageObject {
      *                      there are no deferred props on this page — a {@link PageObjectSerializer}
      *                      is expected to omit the field entirely in that case, per the protocol's
      *                      "only relevant labels appear per response" rule.
+     * @param mergeInstructions which props on this page should be merged (rather than replaced)
+     *                          client-side, and how. {@link MergeInstructions#none()} when there
+     *                          are none — a {@link PageObjectSerializer} is expected to omit each
+     *                          of its four fields individually when empty, per the protocol's
+     *                          "only relevant labels appear per response" rule.
+     * @param rescuedProps keys of props whose resolution threw and was swallowed. Empty when none
+     *                     — a {@link PageObjectSerializer} is expected to omit the field entirely
+     *                     in that case.
      */
     public PageObject(
         String component,
@@ -42,7 +52,9 @@ public class PageObject {
         boolean encryptHistory,
         boolean clearHistory,
         Object version,
-        Map<String, List<String>> deferredProps
+        Map<String, List<String>> deferredProps,
+        MergeInstructions mergeInstructions,
+        List<String> rescuedProps
     ) {
         this.component = component;
         this.props = props;
@@ -51,6 +63,8 @@ public class PageObject {
         this.clearHistory = clearHistory;
         this.version = version;
         this.deferredProps = deferredProps;
+        this.mergeInstructions = mergeInstructions;
+        this.rescuedProps = rescuedProps;
     }
 
     /**
@@ -118,5 +132,62 @@ public class PageObject {
      */
     public Map<String, List<String>> getDeferredProps() {
         return deferredProps;
+    }
+
+    /**
+     * Gets the keys of props to be appended to their existing client-side value, instead of
+     * replacing it — flattened here (rather than nesting the whole {@link MergeInstructions}
+     * object) so a reflection-based {@link PageObjectSerializer} like the Jackson one produces the
+     * flat top-level {@code mergeProps} field the protocol expects.
+     *
+     * @return merge-by-append prop keys; empty when none.
+     * @see <a href="https://inertiajs.com/merging-props">Inertia merging props</a>
+     */
+    public List<String> getMergeProps() {
+        return mergeInstructions.getMergeProps();
+    }
+
+    /**
+     * Gets the keys of props to be prepended to their existing client-side value.
+     *
+     * @return merge-by-prepend prop keys; empty when none.
+     * @see <a href="https://inertiajs.com/merging-props">Inertia merging props</a>
+     */
+    public List<String> getPrependProps() {
+        return mergeInstructions.getPrependProps();
+    }
+
+    /**
+     * Gets the keys of props whose entire structure should be deep-merged into the existing
+     * client-side value.
+     *
+     * @return deep-merge prop keys; empty when none.
+     * @see <a href="https://inertiajs.com/merging-props">Inertia merging props</a>
+     */
+    public List<String> getDeepMergeProps() {
+        return mergeInstructions.getDeepMergeProps();
+    }
+
+    /**
+     * Gets the {@code "<prop>.<path>"} entries identifying the field used to match existing items
+     * during a merge, instead of appending/prepending duplicates.
+     *
+     * @return match-on entries; empty when none.
+     * @see <a href="https://inertiajs.com/merging-props#matching-on-a-different-key">Inertia merging props — matching items</a>
+     */
+    public List<String> getMatchPropsOn() {
+        return mergeInstructions.getMatchPropsOn();
+    }
+
+    /**
+     * Gets the keys of props whose resolution threw and was swallowed (see
+     * {@code Rescuable} in {@code inertia4j.core}), so the client knows that prop simply failed
+     * to load this time instead of silently missing.
+     *
+     * @return rescued prop keys; empty when none.
+     * @see <a href="https://inertiajs.com/deferred-props">Inertia deferred props</a>
+     */
+    public List<String> getRescuedProps() {
+        return rescuedProps;
     }
 }

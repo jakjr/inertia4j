@@ -18,6 +18,15 @@ import java.util.List;
 @NullMarked
 public class JacksonPageObjectSerializer implements PageObjectSerializer {
     /**
+     * Fields that the Inertia protocol's "Metadata Emission" rule
+     * (https://inertiajs.com/the-protocol#metadata-emission) requires to be entirely absent —
+     * not present-but-empty — when there is nothing to report for this page.
+     */
+    private static final List<String> OMIT_WHEN_EMPTY = List.of(
+        "deferredProps", "mergeProps", "prependProps", "deepMergeProps", "matchPropsOn", "rescuedProps"
+    );
+
+    /**
      * The Jackson ObjectMapper instance used for serialization.
      * Configured to order map entries by keys for consistent output.
      */
@@ -27,8 +36,11 @@ public class JacksonPageObjectSerializer implements PageObjectSerializer {
     /**
      * {@inheritDoc}
      * <p>
-     * If {@code partialDataProps} is provided, only the properties specified
-     * in the list will be included under the "props" key in the resulting JSON.
+     * If {@code partialDataProps} is provided, only the top-level properties specified in the
+     * list are retained under the "props" key. {@link io.github.inertia4j.core.InertiaRenderer}
+     * itself never passes anything here (its {@code pageObject.getProps()} is already exactly the
+     * filtered set — including nested-path filtering that a flat top-level retain cannot express),
+     * so this only matters for a caller that builds/serializes a {@link PageObject} directly.
      */
     @Override
     public String serialize(
@@ -41,10 +53,10 @@ public class JacksonPageObjectSerializer implements PageObjectSerializer {
                 ObjectNode propsNode = (ObjectNode) tree.get("props");
                 propsNode.retain(partialDataProps);
             }
-            // Metadata Emission (https://inertiajs.com/the-protocol#metadata-emission): the field
-            // must be absent, not an empty object, when there is nothing deferred on this page.
-            if (tree.get("deferredProps").isEmpty()) {
-                tree.remove("deferredProps");
+            for (String field : OMIT_WHEN_EMPTY) {
+                if (tree.get(field).isEmpty()) {
+                    tree.remove(field);
+                }
             }
             return objectMapper.writeValueAsString(tree);
         } catch (JsonProcessingException e) {

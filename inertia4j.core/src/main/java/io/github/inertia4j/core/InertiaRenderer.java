@@ -1,7 +1,10 @@
 package io.github.inertia4j.core;
 
 import io.github.inertia4j.core.props.Deferrable;
+import io.github.inertia4j.core.props.Mergeable;
+import io.github.inertia4j.core.props.Rescuable;
 import io.github.inertia4j.core.props.ResolvableProp;
+import io.github.inertia4j.spi.MergeInstructions;
 import io.github.inertia4j.spi.PageObject;
 import io.github.inertia4j.spi.PageObjectSerializer;
 import io.github.inertia4j.spi.SerializationException;
@@ -154,7 +157,7 @@ public class InertiaRenderer {
         var response = new HttpResponse();
 
         PageObject pageObject = pageObjectFromOptions(request, options);
-        String serializedPageObject = serializePageObject(request, pageObject);
+        String serializedPageObject = serializePageObject(pageObject);
 
         String inertiaHeader = request.getHeader("X-Inertia");
         if (inertiaHeader != null && inertiaHeader.equalsIgnoreCase("true")) {
@@ -172,24 +175,18 @@ public class InertiaRenderer {
     }
 
     /**
-     * Creates a {@link PageObject} instance from the provided rendering options.
-     * Checks for the `X-Inertia-Partial-Component` header to potentially modify props based on
-     * partial rendering requests, and resolves each prop according to the partial-reload filter
-     * and {@link Deferrable}/{@link ResolvableProp} semantics (see {@link #resolveProps}).
+     * Creates a {@link PageObject} instance from the provided rendering options, resolving props
+     * according to the partial-reload filter and {@link Deferrable}/{@link ResolvableProp}/
+     * {@link Mergeable}/{@link Rescuable} semantics (see {@link #resolveProps}).
      *
      * @param request The incoming HTTP request.
      * @param options The rendering options.
      * @return A configured {@link PageObject}.
      */
     private PageObject pageObjectFromOptions(HttpRequest request, InertiaRenderingOptions options) {
-        String partialComponentHeader = request.getHeader("X-Inertia-Partial-Component");
-        if (partialComponentHeader != null) {
-            options = options.withPartialComponent(partialComponentHeader);
-        }
-
         Map<String, Object> rawProps = options.props != null ? options.props : Map.of();
-        Map<String, List<String>> deferredProps = new LinkedHashMap<>();
-        Map<String, Object> resolvedProps = resolveProps(request, rawProps, deferredProps);
+        ResolutionContext ctx = new ResolutionContext(request, options.componentName);
+        Map<String, Object> resolvedProps = resolveProps(rawProps, "", false, ctx);
 
         return new PageObject(
             options.componentName,
@@ -198,59 +195,193 @@ public class InertiaRenderer {
             options.encryptHistory,
             options.clearHistory,
             versionProvider.get(),
-            deferredProps
+            ctx.deferredProps,
+            new MergeInstructions(ctx.mergeProps, ctx.prependProps, ctx.deepMergeProps, ctx.matchPropsOn),
+            ctx.rescuedProps
         );
     }
 
     /**
-     * Decides, for every raw prop, whether it is included (and resolved) in this response —
-     * driven by the `X-Inertia-Partial-Data` only-list (when present) and each value's
-     * {@link Deferrable}/{@link ResolvableProp} markers.
+     * Everything one {@link #pageObjectFromOptions} call needs to resolve a props tree, mirroring
+     * {@code Inertia\PropsResolver} (inertia-laravel): the partial-reload signal and its
+     * only/except/reset lists (fixed for the whole resolution), plus the metadata every recursive
+     * {@link #resolveProps} call accumulates into as it walks the tree.
      * <p>
-     * A {@link Deferrable} prop is never resolved on a full visit (no `X-Inertia-Partial-Data`
-     * header at all): it is left out of the returned map and its key recorded into
-     * {@code deferredPropsOut}, grouped by {@link Deferrable#getGroup()}, so the client knows to
-     * issue a follow-up partial reload for it. On a partial reload it behaves like any other prop
-     * — included only if its key is in the only-list.
+     * Whether this is a partial reload is decided the same way Laravel does it — by comparing
+     * {@code X-Inertia-Partial-Component} against the component actually being rendered, not by
+     * merely checking whether {@code X-Inertia-Partial-Data} is present. A client that still has
+     * a stale/different page open (and so sends a mismatched component name) gets the full prop
+     * tree back, ignoring its only/except lists, instead of a response filtered against the wrong
+     * page's expectations.
+     */
+    private static final class ResolutionContext {
+        final boolean isPartial;
+        final List<String> onlyPaths;
+        final List<String> exceptPaths;
+        final List<String> resetPaths;
+
+        final Map<String, List<String>> deferredProps = new LinkedHashMap<>();
+        final List<String> mergeProps = new ArrayList<>();
+        final List<String> prependProps = new ArrayList<>();
+        final List<String> deepMergeProps = new ArrayList<>();
+        final List<String> matchPropsOn = new ArrayList<>();
+        final List<String> rescuedProps = new ArrayList<>();
+
+        ResolutionContext(HttpRequest request, String componentName) {
+            String partialComponentHeader = request.getHeader("X-Inertia-Partial-Component");
+            this.isPartial = partialComponentHeader != null && partialComponentHeader.equals(componentName);
+            this.onlyPaths = parseCsvHeader(request, "X-Inertia-Partial-Data");
+            this.exceptPaths = parseCsvHeader(request, "X-Inertia-Partial-Except");
+            List<String> reset = parseCsvHeader(request, "X-Inertia-Reset");
+            this.resetPaths = reset != null ? reset : List.of();
+        }
+    }
+
+    /**
+     * Recursively resolves a props tree (or sub-tree) into the values actually sent to the
+     * client, collecting deferred/merge/rescue metadata along the way — the Java equivalent of
+     * {@code PropsResolver::resolveProps()} in inertia-laravel. Recursion (not just a flat
+     * top-level pass) is what lets a {@link Deferrable}/{@link Mergeable} prop live at any depth
+     * (e.g. {@code feed.posts}), and what lets `X-Inertia-Partial-Data`/`X-Inertia-Partial-Except`
+     * target a nested path.
      *
-     * @param request the incoming HTTP request (read for the partial-reload only-list).
-     * @param rawProps the props as passed to {@code Inertia.render()}, still possibly wrapping
-     *                 {@link ResolvableProp}/{@link Deferrable} values.
-     * @param deferredPropsOut mutated in place with the deferred prop keys skipped this response,
-     *                         grouped by request group.
-     * @return the props to actually put on the {@link PageObject}, with every
-     *         {@link ResolvableProp} already resolved to its real value.
+     * @param props the props at this level — top-level props on the outermost call, or a nested
+     *              {@code Map} value's own props on a recursive call.
+     * @param prefix the dotted path leading to {@code props} (empty at the top level).
+     * @param parentWasResolved whether an ancestor of {@code props} was itself produced by
+     *                          resolving a {@link ResolvableProp}/callback rather than being a
+     *                          plain {@code Map} already — such a value was explicitly requested
+     *                          as a whole, so its children bypass further only/except filtering
+     *                          (mirrors {@code $parentWasResolved} in the Laravel source).
+     * @param ctx the resolution-wide signals ({@link ResolutionContext#isPartial} and its
+     *            only/except/reset lists) and the metadata lists mutated as props are visited.
+     * @return the resolved props at this level, with every {@link ResolvableProp} already
+     *         resolved to its real value and nested {@code Map} values recursively resolved too.
      */
     private Map<String, Object> resolveProps(
-        HttpRequest request,
-        Map<String, Object> rawProps,
-        Map<String, List<String>> deferredPropsOut
+        Map<String, Object> props,
+        String prefix,
+        boolean parentWasResolved,
+        ResolutionContext ctx
     ) {
-        List<String> onlyKeys = parseCsvHeader(request, "X-Inertia-Partial-Data");
-        boolean isPartialReload = onlyKeys != null;
-
-        Map<String, Object> resolvedProps = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> entry : rawProps.entrySet()) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : props.entrySet()) {
             String key = entry.getKey();
-            Object value = entry.getValue();
+            Object prop = entry.getValue();
+            String path = prefix.isEmpty() ? key : prefix + "." + key;
 
-            if (value instanceof Deferrable) {
-                if (!isPartialReload) {
-                    String group = ((Deferrable) value).getGroup();
-                    deferredPropsOut.computeIfAbsent(group, g -> new ArrayList<>()).add(key);
-                    continue;
-                }
-                if (!onlyKeys.contains(key)) {
-                    // Partial reload, but not (yet) asking for this deferred prop's group.
-                    continue;
-                }
-            } else if (isPartialReload && !onlyKeys.contains(key)) {
+            if (!shouldInclude(path, parentWasResolved, ctx)) {
                 continue;
             }
 
-            resolvedProps.put(key, resolveIfNeeded(value));
+            // Full visit only: a Deferrable prop is never resolved now, only announced (and, if
+            // it is also Mergeable, its merge instructions are announced too, so the client
+            // already knows how to fold in the value once it fetches it later).
+            if (!ctx.isPartial && prop instanceof Deferrable) {
+                String group = ((Deferrable) prop).getGroup();
+                ctx.deferredProps.computeIfAbsent(group, g -> new ArrayList<>()).add(path);
+                if (prop instanceof Mergeable) {
+                    recordMergeInstructions(path, (Mergeable) prop, ctx);
+                }
+                continue;
+            }
+
+            boolean shouldRescue = prop instanceof Rescuable && ((Rescuable) prop).shouldRescue();
+            Object value;
+            try {
+                value = resolveIfNeeded(prop);
+            } catch (RuntimeException e) {
+                if (!shouldRescue) {
+                    throw e;
+                }
+                ctx.rescuedProps.add(path);
+                continue;
+            }
+
+            if (prop instanceof Mergeable) {
+                recordMergeInstructions(path, (Mergeable) prop, ctx);
+            }
+
+            if (value instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> nested = (Map<String, Object>) value;
+                boolean childParentWasResolved = parentWasResolved || !(prop instanceof Map);
+                result.put(key, resolveProps(nested, path, childParentWasResolved, ctx));
+            } else {
+                result.put(key, value);
+            }
         }
-        return resolvedProps;
+        return result;
+    }
+
+    /**
+     * Mirrors {@code shouldIncludeInPartialResponse()}: on a full visit (or for children of an
+     * already-resolved value) everything is included; on a partial reload, a path is included
+     * when it matches (or is an ancestor/descendant of) the only-list, and isn't excepted.
+     */
+    private static boolean shouldInclude(String path, boolean parentWasResolved, ResolutionContext ctx) {
+        if (!ctx.isPartial || parentWasResolved) {
+            return true;
+        }
+        if (ctx.onlyPaths != null && !matchesPath(path, ctx.onlyPaths) && !leadsToPath(path, ctx.onlyPaths)) {
+            return false;
+        }
+        return ctx.exceptPaths == null || !matchesPath(path, ctx.exceptPaths);
+    }
+
+    /**
+     * Mirrors {@code isIncludedInPartialMetadata()}: stricter than {@link #shouldInclude} — no
+     * "leads to" allowance — since a container path only present to let recursion reach a deeper
+     * only-target shouldn't itself be flagged as mergeable.
+     */
+    private static boolean isIncludedInPartialMetadata(String path, ResolutionContext ctx) {
+        if (ctx.onlyPaths != null && !matchesPath(path, ctx.onlyPaths)) {
+            return false;
+        }
+        return ctx.exceptPaths == null || !matchesPath(path, ctx.exceptPaths);
+    }
+
+    /** Whether {@code path} equals, or is a descendant of, one of {@code candidates}. */
+    private static boolean matchesPath(String path, List<String> candidates) {
+        for (String candidate : candidates) {
+            if (path.equals(candidate) || path.startsWith(candidate + ".")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether {@code path} is an ancestor of one of {@code candidates}. */
+    private static boolean leadsToPath(String path, List<String> candidates) {
+        for (String candidate : candidates) {
+            if (candidate.startsWith(path + ".")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void recordMergeInstructions(String path, Mergeable mergeable, ResolutionContext ctx) {
+        if (ctx.resetPaths.contains(path)) {
+            return;
+        }
+        if (ctx.isPartial && !isIncludedInPartialMetadata(path, ctx)) {
+            return;
+        }
+        switch (mergeable.getMergeStrategy()) {
+            case APPEND:
+                ctx.mergeProps.add(path);
+                break;
+            case PREPEND:
+                ctx.prependProps.add(path);
+                break;
+            case DEEP:
+                ctx.deepMergeProps.add(path);
+                break;
+        }
+        for (String relativePath : mergeable.getMatchOn()) {
+            ctx.matchPropsOn.add(path + "." + relativePath);
+        }
     }
 
     private static Object resolveIfNeeded(Object value) {
@@ -259,15 +390,20 @@ public class InertiaRenderer {
 
     /**
      * Serializes the {@link PageObject} into a JSON string.
-     * Checks for the `X-Inertia-Partial-Data` header to determine if only a subset of props should be included in the JSON.
+     * <p>
+     * {@code pageObject.getProps()} is already exactly the partial-reload-filtered set — see
+     * {@link #resolveProps}, which (unlike a post-hoc filter over the serialized JSON) can follow
+     * a nested `only`/`except` path like {@code "feed.posts"} correctly. So there is nothing left
+     * for the serializer to filter; the {@code partialDataProps} parameter on
+     * {@link PageObjectSerializer} exists for serializer implementations that might still want it,
+     * not because this renderer needs it applied again.
      *
-     * @param request The incoming HTTP request.
      * @param pageObject The PageObject to serialize.
      * @return The JSON string representation of the PageObject.
      * @throws SerializationException if serialization fails.
      */
-    private String serializePageObject(HttpRequest request, PageObject pageObject) throws SerializationException {
-        return pageObjectSerializer.serialize(pageObject, parseCsvHeader(request, "X-Inertia-Partial-Data"));
+    private String serializePageObject(PageObject pageObject) throws SerializationException {
+        return pageObjectSerializer.serialize(pageObject, null);
     }
 
     /**

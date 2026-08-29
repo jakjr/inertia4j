@@ -1,15 +1,18 @@
 import io.github.inertia4j.core.*;
 import io.github.inertia4j.core.props.DeferProp;
+import io.github.inertia4j.core.props.MergeProp;
 import io.github.inertia4j.spi.PageObjectSerializer;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class InertiaRendererTest {
     private final PageObjectSerializer pageObjectSerializer = new DefaultPageObjectSerializer();
@@ -217,6 +220,7 @@ public class InertiaRendererTest {
     void render_withDeferredProp_onPartialReloadForAnotherProp_omitsItWithoutResolving() {
         var httpRequest = new FakeHttpRequest("GET", Map.of(
             "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
             "X-Inertia-Partial-Data", "user"
         ));
         Map<String, Object> props = Map.of(
@@ -230,6 +234,153 @@ public class InertiaRendererTest {
         HttpResponse response = render(httpRequest, options);
 
         var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withMergeProp_appendsByDefault() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("posts", new MergeProp(List.of("Post 1")));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"posts\":[\"Post 1\"]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"mergeProps\":[\"posts\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withMergeProp_prependAndMatchOn() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "notifications", new MergeProp(List.of(Map.of("id", 2))).prepend().matchOn("id")
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"notifications\":[{\"id\":2}]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"prependProps\":[\"notifications\"],\"matchPropsOn\":[\"notifications.id\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withMergeProp_deepMerge() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("config", new MergeProp(Map.of("theme", "dark")).deepMerge());
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"config\":{\"theme\":\"dark\"}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"deepMergeProps\":[\"config\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withMergeProp_resetHeader_resolvesButOmitsFromMergeMetadata() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Reset", "posts"
+        ));
+        Map<String, Object> props = Map.of("posts", new MergeProp(List.of("Post fresco")));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // Valor normal, sem mergeProps: X-Inertia-Reset pede substituicao, nao merge, desta vez.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"posts\":[\"Post fresco\"]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withNestedMergeProp_pathIsPrefixedAndReachableViaOnly() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "feed.posts"
+        ));
+        Map<String, Object> feed = new LinkedHashMap<>();
+        feed.put("posts", new MergeProp(List.of("Post 1")));
+        feed.put("title", "Feed"); // nao pedido no only-list, deve sumir da resposta
+        Map<String, Object> props = Map.of("feed", feed);
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // "feed" sobrevive so pra recursao alcancar "feed.posts" (leadsToPath); "feed.title" some.
+        // mergeProps carrega o path completo "feed.posts", nao so "posts".
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"feed\":{\"posts\":[\"Post 1\"]}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"mergeProps\":[\"feed.posts\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withPartialExceptHeader_excludesProp() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Except", "secret"
+        ));
+        Map<String, Object> props = Map.of("user", "test", "secret", "shh");
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withRescuedDeferProp_onPartialReload_reportsRescuedInsteadOfThrowing() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "comments"
+        ));
+        Map<String, Object> props = Map.of(
+            "comments", new DeferProp(() -> { throw new RuntimeException("falhou"); }).rescue()
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"rescuedProps\":[\"comments\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withNonRescuedDeferProp_onPartialReload_propagatesException() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "comments"
+        ));
+        Map<String, Object> props = Map.of(
+            "comments", new DeferProp(() -> { throw new RuntimeException("falhou"); })
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        assertThrows(RuntimeException.class, () -> render(httpRequest, options));
+    }
+
+    @Test
+    void render_withMismatchedPartialComponent_treatsAsFullVisit() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "OutraPagina",
+            "X-Inertia-Partial-Data", "user"
+        ));
+        Map<String, Object> props = Map.of(
+            "user", "test",
+            "comments", new DeferProp(() -> {
+                throw new AssertionError("nao deveria resolver num full visit");
+            })
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // O X-Inertia-Partial-Component pedido nao bate com o componente atual: tratado como
+        // full visit (only-list "user" e ignorado, "comments" ainda vira deferredProps).
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"deferredProps\":{\"default\":[\"comments\"]}}";
         assertEquals(expectedJson, response.getBody());
     }
 

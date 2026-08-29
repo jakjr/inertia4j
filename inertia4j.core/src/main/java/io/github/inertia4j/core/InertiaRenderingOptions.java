@@ -34,22 +34,4 @@ public class InertiaRenderingOptions {
         this.componentName = componentName;
         this.props = props;
     }
-
-    /**
-     * Creates a new {@code InertiaRenderingOptions} instance with a potentially different component name.
-     * This is used internally when handling partial reloads requested via the `X-Inertia-Partial-Component` header,
-     * allowing the server to respond with the same props but target a different component on the client-side.
-     *
-     * @param component The name of the component specified in the partial reload request.
-     * @return A new {@code InertiaRenderingOptions} instance with the updated component name.
-     */
-    public InertiaRenderingOptions withPartialComponent(String component) {
-        return new InertiaRenderingOptions(
-            this.encryptHistory,
-            this.clearHistory,
-            this.url,
-            component,
-            this.props
-        );
-    }
 }
