@@ -1,7 +1,9 @@
 import io.github.inertia4j.core.*;
+import io.github.inertia4j.core.props.AlwaysProp;
 import io.github.inertia4j.core.props.DeferProp;
 import io.github.inertia4j.core.props.MergeProp;
 import io.github.inertia4j.core.props.OnceProp;
+import io.github.inertia4j.core.props.OptionalProp;
 import io.github.inertia4j.core.props.ScrollPage;
 import io.github.inertia4j.core.props.ScrollProp;
 import io.github.inertia4j.spi.PageObjectSerializer;
@@ -721,6 +723,137 @@ public class InertiaRendererTest {
         HttpResponse response = render(httpRequest, options);
 
         var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withAlwaysProp_onFullVisit_resolvesLikeAnOrdinaryProp() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("flash", new AlwaysProp(() -> "mensagem"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"flash\":\"mensagem\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withAlwaysProp_onPartialReloadForAnotherProp_isIncludedAnyway() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "user"
+        ));
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("user", "test");
+        props.put("flash", new AlwaysProp(() -> "mensagem"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // "flash" nao esta no only-list ("user"), mas AlwaysProp ignora o filtro por inteiro —
+        // o mesmo `$prop instanceof AlwaysProp` que faz shouldIncludeInPartialResponse() devolver
+        // true de cara no Laravel (e o `return true if prop.is_a?(AlwaysProp)` no Rails).
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"flash\":\"mensagem\",\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withAlwaysProp_onPartialReloadThatExceptsIt_isIncludedAnyway() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Except", "flash"
+        ));
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("user", "test");
+        props.put("flash", new AlwaysProp(() -> "mensagem"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // AlwaysProp bypassa o only E o except — X-Inertia-Partial-Except nomeando "flash" nao
+        // tem efeito nenhum sobre ele, diferente de um prop comum.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"flash\":\"mensagem\",\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOptionalProp_onFullVisit_isExcludedAndNotAnnouncedAnywhere() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "user", "test",
+            "relatorio", new OptionalProp(() -> {
+                throw new AssertionError("optional prop nao deveria resolver num full visit");
+            })
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // Ao contrario de um DeferProp, nao aparece nem em "props" nem em "deferredProps" — o
+        // cliente nao tem absolutamente nenhuma pista de que "relatorio" existe.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOptionalProp_onPartialReloadRequestingItExplicitly_resolvesIt() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "relatorio"
+        ));
+        Map<String, Object> props = Map.of(
+            "user", "test",
+            "relatorio", new OptionalProp(() -> "relatorio completo")
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"relatorio\":\"relatorio completo\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOptionalProp_onPartialReloadForAnotherProp_isExcludedLikeAnOrdinaryProp() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "user"
+        ));
+        Map<String, Object> props = Map.of(
+            "user", "test",
+            "relatorio", new OptionalProp(() -> {
+                throw new AssertionError("prop fora do only-list nao deveria resolver");
+            })
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withOptionalOnceProp_onFullVisit_announcesOnceMetadataWithoutDeferredEntry() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "relatorio", new OptionalProp(() -> {
+                throw new AssertionError("optional prop nao deveria resolver num full visit");
+            }).once()
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // onceProps aparece (pro cliente saber a chave/expiracao caso venha a pedir "relatorio"
+        // depois), mas nao ha "deferredProps" nenhum — diferente de um DeferProp().once(), que
+        // apareceria em deferredProps mesmo assim.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"onceProps\":{\"relatorio\":{\"prop\":\"relatorio\",\"expiresAt\":null}}}";
         assertEquals(expectedJson, response.getBody());
     }
 

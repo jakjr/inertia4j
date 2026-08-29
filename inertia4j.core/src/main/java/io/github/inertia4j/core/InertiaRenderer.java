@@ -1,8 +1,10 @@
 package io.github.inertia4j.core;
 
+import io.github.inertia4j.core.props.AlwaysProp;
 import io.github.inertia4j.core.props.Deferrable;
 import io.github.inertia4j.core.props.Mergeable;
 import io.github.inertia4j.core.props.Onceable;
+import io.github.inertia4j.core.props.OptionalProp;
 import io.github.inertia4j.core.props.ProvidesScrollMetadata;
 import io.github.inertia4j.core.props.Rescuable;
 import io.github.inertia4j.core.props.ResolvableProp;
@@ -335,7 +337,7 @@ public class InertiaRenderer {
      * rescued after throwing).
      */
     private Object resolveProp(Object prop, String path, boolean parentWasResolved, ResolutionContext ctx) {
-        if (!shouldInclude(path, parentWasResolved, ctx)) {
+        if (!shouldInclude(prop, path, parentWasResolved, ctx)) {
             return SKIP;
         }
 
@@ -354,6 +356,18 @@ public class InertiaRenderer {
                 if (prop instanceof Mergeable) {
                     recordMergeInstructions(path, (Mergeable) prop, ctx);
                 }
+                if (prop instanceof Onceable) {
+                    recordOnceMetadata(path, (Onceable) prop, ctx);
+                }
+                return SKIP;
+            }
+            // An OptionalProp is excluded from every full visit too, but — unlike a deferred
+            // prop — it is never announced anywhere: no deferredProps entry, so the client has
+            // no way to know it exists until it asks for it by name in a partial reload. Once
+            // metadata is still recorded unconditionally here (not gated on whether the client
+            // already claims a cached copy), mirroring excludeIgnoredProp()/keep_prop? for a
+            // prop that is IgnoreFirstLoad without being Deferrable.
+            if (prop instanceof OptionalProp) {
                 if (prop instanceof Onceable) {
                     recordOnceMetadata(path, (Onceable) prop, ctx);
                 }
@@ -425,10 +439,13 @@ public class InertiaRenderer {
     /**
      * Mirrors {@code shouldIncludeInPartialResponse()}: on a full visit (or for children of an
      * already-resolved value) everything is included; on a partial reload, a path is included
-     * when it matches (or is an ancestor/descendant of) the only-list, and isn't excepted.
+     * when it matches (or is an ancestor/descendant of) the only-list, and isn't excepted —
+     * unless {@code prop} is an {@link AlwaysProp}, which bypasses the only/except filter
+     * entirely (both reference adapters special-case it with this same direct class check,
+     * rather than an interface — see {@link AlwaysProp}'s javadoc).
      */
-    private static boolean shouldInclude(String path, boolean parentWasResolved, ResolutionContext ctx) {
-        if (!ctx.isPartial || parentWasResolved) {
+    private static boolean shouldInclude(Object prop, String path, boolean parentWasResolved, ResolutionContext ctx) {
+        if (!ctx.isPartial || prop instanceof AlwaysProp || parentWasResolved) {
             return true;
         }
         if (ctx.onlyPaths != null && !matchesPath(path, ctx.onlyPaths) && !leadsToPath(path, ctx.onlyPaths)) {
