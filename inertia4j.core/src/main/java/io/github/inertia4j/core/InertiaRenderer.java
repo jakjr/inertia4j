@@ -203,14 +203,21 @@ public class InertiaRenderer {
         // page's own props — a key the page also sets wins, same as array_merge($shared, $props)
         // — then resolved through the exact same recursive pass as any other prop (a shared value
         // can be Deferrable/Mergeable/etc. too, unlike flash which never enters resolveProps at
-        // all). sharedPropKeys is captured from the unmerged map, before resolution touches it,
-        // since it announces which *top-level* keys came from sharing, not their resolved values.
+        // all). sharedPropKeys is captured from the unmerged map, before resolution — and before
+        // unpackDotProps — touches it, since it announces which *top-level* keys came from
+        // sharing, not their resolved values. A dotted shared key (e.g. "auth.user") announces
+        // only the segment before its first dot ("auth"), mirroring resolveSharedProps()'s
+        // str_contains($key, '.') ? strstr($key, '.', true) : $key, deduplicated in first-seen
+        // order like array_unique().
         Map<String, Object> mergedProps = new LinkedHashMap<>(sharedProps);
         mergedProps.putAll(rawProps);
-        List<String> sharedPropKeys = List.copyOf(sharedProps.keySet());
+        List<String> sharedPropKeys = sharedProps.keySet().stream()
+            .map(InertiaRenderer::topLevelSegment)
+            .distinct()
+            .collect(Collectors.toUnmodifiableList());
 
         ResolutionContext ctx = new ResolutionContext(request, options.componentName);
-        Map<String, Object> resolvedProps = resolveProps(mergedProps, "", false, ctx);
+        Map<String, Object> resolvedProps = resolveProps(unpackDotProps(mergedProps), "", false, ctx);
 
         return new PageObject(
             options.componentName,
@@ -227,6 +234,107 @@ public class InertiaRenderer {
             options.flash != null ? options.flash : Map.of(),
             sharedPropKeys
         );
+    }
+
+    /** The part of {@code key} before its first {@code '.'}, or {@code key} itself if it has none. */
+    private static String topLevelSegment(String key) {
+        int dot = key.indexOf('.');
+        return dot < 0 ? key : key.substring(0, dot);
+    }
+
+    /**
+     * Expands top-level dot-notation keys into nested maps, mirroring
+     * {@code PropsResolver::unpackDotProps()} (inertia-laravel) /
+     * {@code PropsResolver#expand_dot_notation} (inertia-rails) — e.g. a prop registered as
+     * {@code "auth.user"} arrives to the client as {@code {"auth": {"user": ...}}}, exactly as if
+     * the caller had built that nested {@code Map} by hand. Runs once, directly on {@code props}
+     * (the already-merged shared+page map), <em>before</em> {@link #resolveProps} — never
+     * recursively inside an already-nested value, matching upstream's explicit scoping decision
+     * (inertia-laravel {@code #355}: dot notation was deliberately restricted to the top level
+     * after shipping a version that also expanded dots found inside nested prop values).
+     * <p>
+     * The real value here isn't typing convenience (a Java caller can write a nested {@code Map}
+     * literal as easily as a dotted string) — it's composability: this is what lets two unrelated
+     * call sites (e.g. two {@code InertiaShared.share()} calls, or a shared default plus a page's
+     * own prop) each contribute a piece of the <em>same</em> nested object without one silently
+     * replacing the other's contribution wholesale, the way a plain top-level key collision would
+     * (mirrors the real {@code Arr::set}/{@code auth.user.can.deleteProducts} composition
+     * inertia-laravel's own issue tracker documents, and Rails' shallow hash merge on same-key
+     * collision below).
+     *
+     * @param props the merged shared+page props map, in insertion order (shared first, so a page
+     *              prop's leaf wins over a shared prop's leaf at the same dotted path — same
+     *              "later wins" rule as the shared/page merge itself).
+     * @return {@code props} with every dotted top-level key expanded into nested maps, and plain
+     *         keys shallow-merged into an already-expanded map at the same name instead of
+     *         replacing it outright (mirrors {@code expand_dot_notation}'s
+     *         {@code result[key].merge!(value)} branch).
+     */
+    private static Map<String, Object> unpackDotProps(Map<String, Object> props) {
+        boolean anyDotted = props.keySet().stream().anyMatch(key -> key.indexOf('.') >= 0);
+        if (!anyDotted) {
+            return props;
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : props.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            if (key.indexOf('.') < 0) {
+                if (value instanceof Map && result.get(key) instanceof Map) {
+                    // A plain key colliding with a Map an earlier dotted key already expanded at
+                    // this name — shallow-merge rather than replace, mirroring
+                    // expand_dot_notation's result[key].merge!(value). Copy first: what's already
+                    // in `result` here is always our own mutable map (see mutableNestedMap below),
+                    // but defensive copying keeps this branch correct even if that invariant ever
+                    // changes, at negligible cost for prop-tree-sized maps.
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> existing = (Map<String, Object>) result.get(key);
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> toMerge = (Map<String, Object>) value;
+                    Map<String, Object> merged = new LinkedHashMap<>(existing);
+                    merged.putAll(toMerge);
+                    result.put(key, merged);
+                } else {
+                    result.put(key, value);
+                }
+                continue;
+            }
+            String[] segments = key.split("\\.");
+            Map<String, Object> current = result;
+            for (int i = 0; i < segments.length - 1; i++) {
+                current = mutableNestedMap(current, segments[i]);
+            }
+            current.put(segments[segments.length - 1], value);
+        }
+        return result;
+    }
+
+    /**
+     * Returns a mutable {@code Map} at {@code parent.get(segment)}, replacing whatever is there —
+     * copying an existing {@code Map}'s entries into a fresh one rather than mutating it in
+     * place. Needed because a value arriving here can be one the caller still holds a reference to
+     * (e.g. a {@code Map.of(...)} literal passed as a plain sibling prop, or reused directly as an
+     * app-wide shared-data value) — mutating it in place would both corrupt state the caller
+     * doesn't expect this method to touch and, for an immutable {@code Map.of(...)} specifically
+     * (routine in this codebase, including in this project's own {@code InertiaShared}), throw
+     * {@code UnsupportedOperationException} the moment a second dotted key tries to add a sibling
+     * under the same path. PHP arrays/Ruby hashes don't have this hazard (they're copied on
+     * write/assignment by the language itself), so neither reference implementation needed to
+     * guard against it explicitly — this is a Java-specific correctness requirement, not a design
+     * choice mirrored from upstream.
+     */
+    private static Map<String, Object> mutableNestedMap(Map<String, Object> parent, String segment) {
+        Object existing = parent.get(segment);
+        Map<String, Object> nested;
+        if (existing instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> existingMap = (Map<String, Object>) existing;
+            nested = new LinkedHashMap<>(existingMap);
+        } else {
+            nested = new LinkedHashMap<>();
+        }
+        parent.put(segment, nested);
+        return nested;
     }
 
     /**

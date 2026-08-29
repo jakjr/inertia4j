@@ -1094,6 +1094,131 @@ public class InertiaRendererTest {
         assertEquals(expectedJson, response.getBody());
     }
 
+    @Test
+    void render_withDottedPropKey_expandsIntoNestedObject() {
+        // Mirrors PropsResolver::unpackDotProps()/expand_dot_notation(): a flat "auth.user" key
+        // arrives to the client exactly as if the caller had built {"auth": {"user": ...}} by
+        // hand — the client-side dot-path targeting (X-Inertia-Partial-Data: auth.user,
+        // router.reload({ only: ['auth.notifications'] })) only makes sense once the server
+        // actually nests the value this way.
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("auth.user", Map.of("nome", "Ada"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"auth\":{\"user\":{\"nome\":\"Ada\"}}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withTwoDottedPropKeysSharingAPrefix_composeIntoOneObject() {
+        // The exact scenario from inertia-laravel issue #355: two independent dotted keys
+        // targeting the same parent must compose into one object, not have the second overwrite
+        // the first outright — that's the real value of dot notation over a plain top-level Map
+        // key (which *can't* express "add a sibling to whatever's already at this name").
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("auth.user", Map.of("nome", "Ada"));
+        props.put("auth.permissions", List.of("editar"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"auth\":{\"permissions\":[\"editar\"],\"user\":{\"nome\":\"Ada\"}}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withDottedSharedPropAndPlainPageProp_composeWithoutClobbering() {
+        // The scenario this feature actually exists to solve in this project: InertiaShared
+        // registers "usuario.papel" (a piece of app-wide shared data) while a page independently
+        // sets its own plain "usuario" prop — neither should silently erase the other's
+        // contribution to the same top-level name, the way a flat Map key collision would.
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> shared = Map.of("usuario.papel", "admin");
+        Map<String, Object> props = Map.of("usuario", Map.of("nome", "Explícito"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props, Map.of(), shared);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"usuario\":{\"nome\":\"Explícito\",\"papel\":\"admin\"}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"sharedProps\":[\"usuario\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withDottedSharedPropKey_announcesOnlyTheTopLevelSegment() {
+        // Mirrors resolveSharedProps(): str_contains($key, '.') ? strstr($key, '.', true) : $key —
+        // a shared "auth.user" announces "auth" under sharedProps, never the literal dotted string
+        // (which wouldn't match any real top-level key in the resolved props tree at all).
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> shared = Map.of("auth.user", Map.of("nome", "Ada"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", Map.of(), Map.of(), shared);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"auth\":{\"user\":{\"nome\":\"Ada\"}}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"sharedProps\":[\"auth\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withTwoDottedSharedKeysSharingAPrefix_announcesTheSegmentOnce() {
+        // array_unique()/array_values() on sharedPropKeys — "auth.user" and "auth.permissions"
+        // both normalize to "auth", which must appear once in sharedProps, not twice.
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> shared = new LinkedHashMap<>();
+        shared.put("auth.user", Map.of("nome", "Ada"));
+        shared.put("auth.permissions", List.of("editar"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", Map.of(), Map.of(), shared);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"auth\":{\"permissions\":[\"editar\"],\"user\":{\"nome\":\"Ada\"}}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"sharedProps\":[\"auth\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withDottedKeyAddingToAnImmutableSiblingMap_doesNotThrow() {
+        // Java-specific hazard neither reference implementation has: Map.of(...) (routine in this
+        // codebase — see InertiaShared/InertiaSharedDataFilter) is immutable. A naive port that
+        // navigates into an existing nested Map and calls .put() on it directly would throw
+        // UnsupportedOperationException here, because "usuario" (a Map.of(...) literal) is
+        // processed before the dotted "usuario.papel" tries to add a sibling into it.
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("usuario", Map.of("nome", "Explícito"));
+        props.put("usuario.papel", "admin");
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"usuario\":{\"nome\":\"Explícito\",\"papel\":\"admin\"}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withDottedPropKey_onPartialReload_targetableByExpandedPath() {
+        // Proves expansion and partial-reload filtering compose correctly: a page that declared
+        // "auth.user" (flat, dotted) is filtered by X-Inertia-Partial-Data exactly as if it had
+        // declared Map.of("auth", Map.of("user", ...)) directly — the client can't tell (and
+        // real-world dot-path reload targeting like `only: ['auth.notifications']` depends on it).
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "auth.user"
+        ));
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("auth.user", Map.of("nome", "Ada"));
+        props.put("auth.notifications", List.of("bem-vinda"));
+        props.put("outraProp", "ignorada");
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"auth\":{\"user\":{\"nome\":\"Ada\"}}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
     private HttpResponse render(HttpRequest request, InertiaRenderingOptions options) {
         return new InertiaRenderer(
             pageObjectSerializer,
