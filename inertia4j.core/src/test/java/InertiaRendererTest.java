@@ -1,8 +1,10 @@
 import io.github.inertia4j.core.*;
+import io.github.inertia4j.core.props.DeferProp;
 import io.github.inertia4j.spi.PageObjectSerializer;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
@@ -171,6 +173,64 @@ public class InertiaRendererTest {
         var expectedBody = "{\"component\":\"Component\",\"props\":{},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
 
         assertEquals(expectedBody, response.getBody());
+    }
+
+    @Test
+    void render_withDeferredProp_onFullVisit_omitsValueAndAnnouncesGroup() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "user", "test",
+            "comments", new DeferProp(() -> {
+                throw new AssertionError("deferred prop nao deveria ser resolvido num full visit");
+            })
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"deferredProps\":{\"default\":[\"comments\"]}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withDeferredProp_onPartialReloadRequestingIt_resolvesAndIncludesValue() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "comments"
+        ));
+        Map<String, Object> props = Map.of(
+            "user", "test",
+            "comments", new DeferProp(() -> List.of("Comentario 1"))
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // "user" fica de fora (partial reload so pediu "comments"), e sem deferredProps no
+        // corpo: o cliente ja sabe do grupo desde o full visit anterior.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"comments\":[\"Comentario 1\"]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withDeferredProp_onPartialReloadForAnotherProp_omitsItWithoutResolving() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Data", "user"
+        ));
+        Map<String, Object> props = Map.of(
+            "user", "test",
+            "comments", new DeferProp(() -> {
+                throw new AssertionError("deferred prop de outro grupo nao deveria ser resolvido");
+            })
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
     }
 
     private HttpResponse render(HttpRequest request, InertiaRenderingOptions options) {

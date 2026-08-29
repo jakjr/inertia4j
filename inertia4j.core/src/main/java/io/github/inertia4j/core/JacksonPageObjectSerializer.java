@@ -41,6 +41,11 @@ public class JacksonPageObjectSerializer implements PageObjectSerializer {
                 ObjectNode propsNode = (ObjectNode) tree.get("props");
                 propsNode.retain(partialDataProps);
             }
+            // Metadata Emission (https://inertiajs.com/the-protocol#metadata-emission): the field
+            // must be absent, not an empty object, when there is nothing deferred on this page.
+            if (tree.get("deferredProps").isEmpty()) {
+                tree.remove("deferredProps");
+            }
             return objectMapper.writeValueAsString(tree);
         } catch (JsonProcessingException e) {
             throw new SerializationException(e);

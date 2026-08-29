@@ -2,6 +2,7 @@ package io.github.inertia4j.spi;
 
 import org.jspecify.annotations.NullMarked;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -18,6 +19,7 @@ public class PageObject {
     private final Object version;
     private final boolean encryptHistory;
     private final boolean clearHistory;
+    private final Map<String, List<String>> deferredProps;
 
     /**
      * Constructs a new PageObject.
@@ -28,6 +30,10 @@ public class PageObject {
      * @param encryptHistory flag set to encrypt previous browsing activity.
      * @param clearHistory flag set to clear previous browsing activity.
      * @param version asset version to be compared with current client asset version.
+     * @param deferredProps deferred prop keys, grouped by their request group name. Empty when
+     *                      there are no deferred props on this page — a {@link PageObjectSerializer}
+     *                      is expected to omit the field entirely in that case, per the protocol's
+     *                      "only relevant labels appear per response" rule.
      */
     public PageObject(
         String component,
@@ -35,7 +41,8 @@ public class PageObject {
         String url,
         boolean encryptHistory,
         boolean clearHistory,
-        Object version
+        Object version,
+        Map<String, List<String>> deferredProps
     ) {
         this.component = component;
         this.props = props;
@@ -43,6 +50,7 @@ public class PageObject {
         this.encryptHistory = encryptHistory;
         this.clearHistory = clearHistory;
         this.version = version;
+        this.deferredProps = deferredProps;
     }
 
     /**
@@ -99,5 +107,16 @@ public class PageObject {
      */
     public boolean isClearHistory() {
         return clearHistory;
+    }
+
+    /**
+     * Gets the deferred prop keys announced for this page, grouped by their request group name
+     * (the value passed as the second argument when the prop was deferred server-side).
+     *
+     * @return deferred prop keys by group; empty when nothing was deferred.
+     * @see <a href="https://inertiajs.com/deferred-props">Inertia deferred props</a>
+     */
+    public Map<String, List<String>> getDeferredProps() {
+        return deferredProps;
     }
 }

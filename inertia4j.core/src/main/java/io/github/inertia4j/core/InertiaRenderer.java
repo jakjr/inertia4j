@@ -1,11 +1,15 @@
 package io.github.inertia4j.core;
 
+import io.github.inertia4j.core.props.Deferrable;
+import io.github.inertia4j.core.props.ResolvableProp;
 import io.github.inertia4j.spi.PageObject;
 import io.github.inertia4j.spi.PageObjectSerializer;
 import io.github.inertia4j.spi.SerializationException;
 import io.github.inertia4j.spi.TemplateRenderer;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -169,7 +173,9 @@ public class InertiaRenderer {
 
     /**
      * Creates a {@link PageObject} instance from the provided rendering options.
-     * Checks for the `X-Inertia-Partial-Component` header to potentially modify props based on partial rendering requests.
+     * Checks for the `X-Inertia-Partial-Component` header to potentially modify props based on
+     * partial rendering requests, and resolves each prop according to the partial-reload filter
+     * and {@link Deferrable}/{@link ResolvableProp} semantics (see {@link #resolveProps}).
      *
      * @param request The incoming HTTP request.
      * @param options The rendering options.
@@ -180,14 +186,75 @@ public class InertiaRenderer {
         if (partialComponentHeader != null) {
             options = options.withPartialComponent(partialComponentHeader);
         }
+
+        Map<String, Object> rawProps = options.props != null ? options.props : Map.of();
+        Map<String, List<String>> deferredProps = new LinkedHashMap<>();
+        Map<String, Object> resolvedProps = resolveProps(request, rawProps, deferredProps);
+
         return new PageObject(
             options.componentName,
-            options.props != null ? options.props : Map.of(),
+            resolvedProps,
             options.url,
             options.encryptHistory,
             options.clearHistory,
-            versionProvider.get()
+            versionProvider.get(),
+            deferredProps
         );
+    }
+
+    /**
+     * Decides, for every raw prop, whether it is included (and resolved) in this response —
+     * driven by the `X-Inertia-Partial-Data` only-list (when present) and each value's
+     * {@link Deferrable}/{@link ResolvableProp} markers.
+     * <p>
+     * A {@link Deferrable} prop is never resolved on a full visit (no `X-Inertia-Partial-Data`
+     * header at all): it is left out of the returned map and its key recorded into
+     * {@code deferredPropsOut}, grouped by {@link Deferrable#getGroup()}, so the client knows to
+     * issue a follow-up partial reload for it. On a partial reload it behaves like any other prop
+     * — included only if its key is in the only-list.
+     *
+     * @param request the incoming HTTP request (read for the partial-reload only-list).
+     * @param rawProps the props as passed to {@code Inertia.render()}, still possibly wrapping
+     *                 {@link ResolvableProp}/{@link Deferrable} values.
+     * @param deferredPropsOut mutated in place with the deferred prop keys skipped this response,
+     *                         grouped by request group.
+     * @return the props to actually put on the {@link PageObject}, with every
+     *         {@link ResolvableProp} already resolved to its real value.
+     */
+    private Map<String, Object> resolveProps(
+        HttpRequest request,
+        Map<String, Object> rawProps,
+        Map<String, List<String>> deferredPropsOut
+    ) {
+        List<String> onlyKeys = parseCsvHeader(request, "X-Inertia-Partial-Data");
+        boolean isPartialReload = onlyKeys != null;
+
+        Map<String, Object> resolvedProps = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : rawProps.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+
+            if (value instanceof Deferrable) {
+                if (!isPartialReload) {
+                    String group = ((Deferrable) value).getGroup();
+                    deferredPropsOut.computeIfAbsent(group, g -> new ArrayList<>()).add(key);
+                    continue;
+                }
+                if (!onlyKeys.contains(key)) {
+                    // Partial reload, but not (yet) asking for this deferred prop's group.
+                    continue;
+                }
+            } else if (isPartialReload && !onlyKeys.contains(key)) {
+                continue;
+            }
+
+            resolvedProps.put(key, resolveIfNeeded(value));
+        }
+        return resolvedProps;
+    }
+
+    private static Object resolveIfNeeded(Object value) {
+        return value instanceof ResolvableProp ? ((ResolvableProp) value).resolve() : value;
     }
 
     /**
@@ -200,17 +267,28 @@ public class InertiaRenderer {
      * @throws SerializationException if serialization fails.
      */
     private String serializePageObject(HttpRequest request, PageObject pageObject) throws SerializationException {
-        String partialDataHeader = request.getHeader("X-Inertia-Partial-Data");
+        return pageObjectSerializer.serialize(pageObject, parseCsvHeader(request, "X-Inertia-Partial-Data"));
+    }
 
-        List<String> partialDataProps = null;
-        if (partialDataHeader != null) {
-            partialDataProps = Arrays.stream(partialDataHeader.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .collect(Collectors.toList());
+    /**
+     * Parses a comma-separated header value (e.g. `X-Inertia-Partial-Data`) into a trimmed,
+     * blank-filtered list.
+     *
+     * @param request the incoming HTTP request.
+     * @param headerName the header to read.
+     * @return the parsed list, or {@code null} if the header is absent — callers rely on this
+     *         {@code null} to distinguish "no partial reload at all" from "partial reload naming
+     *         zero props".
+     */
+    private static List<String> parseCsvHeader(HttpRequest request, String headerName) {
+        String header = request.getHeader(headerName);
+        if (header == null) {
+            return null;
         }
-
-        return pageObjectSerializer.serialize(pageObject, partialDataProps);
+        return Arrays.stream(header.split(","))
+            .map(String::trim)
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toList());
     }
 
     /**
