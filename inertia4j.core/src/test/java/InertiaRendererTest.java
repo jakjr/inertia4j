@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -1217,6 +1218,97 @@ public class InertiaRendererTest {
 
         var expectedJson = "{\"component\":\"Component\",\"props\":{\"auth\":{\"user\":{\"nome\":\"Ada\"}}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
         assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withCompletableFuturePropValue_joinsBeforeServing() {
+        // Not a port of anything — neither PHP nor Ruby has an equivalent to CompletableFuture —
+        // but the same position in the pipeline as PromiseInterface's $value->wait() in the real
+        // resolveValue() (plan.md §11.4): block on the future's result before it's ever handed to
+        // the serializer, which has no idea what a CompletableFuture is.
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("dado", CompletableFuture.completedFuture("pronto"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"dado\":\"pronto\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withCompletableFutureNestedInsideListInsideMap_joinsRecursively() {
+        // The actual shape PerguntaResource uses: a List of Maps, each with a "oraculo" leaf that
+        // is its own still-pending CompletableFuture (fired via sendAsync() before this props Map
+        // was even built) — proving resolveIfNeeded runs uniformly at every position resolveProp
+        // recurses into, not just top-level props, is what makes "many independent futures already
+        // in flight, joined one by one during resolution" actually work for a page with more than
+        // one async prop, or (like here) more than one async value inside a single prop's own list.
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> item1 = Map.of("id", 1, "oraculo", CompletableFuture.completedFuture("sim"));
+        Map<String, Object> item2 = Map.of("id", 2, "oraculo", CompletableFuture.completedFuture("não"));
+        Map<String, Object> props = Map.of("perguntas", List.of(item1, item2));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"perguntas\":[{\"id\":1,\"oraculo\":\"sim\"},{\"id\":2,\"oraculo\":\"não\"}]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withDeferPropResolvingToCompletableFuture_joinsAfterResolve() {
+        // A ResolvableProp's own resolve() returning a CompletableFuture (e.g. a DeferProp whose
+        // supplier kicks off async work instead of blocking itself) — resolveIfNeeded must unwrap
+        // both layers, ResolvableProp first, then the future it produced.
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "dado"
+        ));
+        Map<String, Object> props = Map.of(
+            "dado", new DeferProp(() -> CompletableFuture.completedFuture("assíncrono"))
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"dado\":\"assíncrono\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withRescuedDeferPropWhoseFutureFailsExceptionally_reportsRescuedInsteadOfThrowing() {
+        // CompletableFuture#join() throws CompletionException (a RuntimeException) on a future that
+        // completed exceptionally — no CompletableFuture-specific rescue logic was written for this;
+        // it just falls into the same try/catch around resolveIfNeeded that already handles a
+        // Rescuable prop throwing directly, exactly like the existing DeferProp-throws-synchronously
+        // test above, but through a future instead of straight from the supplier.
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "comments"
+        ));
+        Map<String, Object> props = Map.of(
+            "comments", new DeferProp(() -> CompletableFuture.failedFuture(new RuntimeException("falhou"))).rescue()
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"rescuedProps\":[\"comments\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withNonRescuedFutureThatFailsExceptionally_propagatesCompletionException() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "dado", CompletableFuture.failedFuture(new RuntimeException("falhou"))
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        assertThrows(java.util.concurrent.CompletionException.class, () -> render(httpRequest, options));
     }
 
     private HttpResponse render(HttpRequest request, InertiaRenderingOptions options) {

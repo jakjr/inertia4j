@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -701,8 +702,40 @@ public class InertiaRenderer {
         ctx.onceProps.put(key, new OnceMetadata(path, onceable.getExpiresAtMillis()));
     }
 
+    /**
+     * Resolves a {@link ResolvableProp} wrapper, then unwraps a {@link CompletableFuture} value —
+     * whether that came directly from the caller (a prop, or a value nested inside one, whose
+     * value simply <em>is</em> a future) or from a {@link ResolvableProp#resolve()} call that
+     * itself returned one (e.g. a {@code DeferProp} whose supplier kicks off async work).
+     * <p>
+     * This mirrors where {@code resolveValue()} in inertia-laravel unwraps a Guzzle
+     * {@code PromiseInterface} via {@code $value->wait()} — same position in the per-value
+     * resolution chain (after callable/wrapper resolution, blocking the current thread until the
+     * value is actually available) — but isn't a port of anything: neither reference
+     * implementation's language has an equivalent to {@code CompletableFuture} (plan.md §11.4).
+     * The real payoff isn't any single blocking join — it's that {@link #resolveProp} calls this
+     * uniformly on every value at every position in the tree (top-level prop, or nested inside an
+     * already-resolved {@code Map}/{@code List}), so several independent futures kicked off before
+     * {@code render()} is ever called — one per prop, or one per element of a list built with
+     * {@code sendAsync()} instead of a blocking {@code send()} in a loop — are all already in
+     * flight by the time resolution starts joining them one by one, turning what would have been
+     * the sum of their latencies into roughly the slowest one (see
+     * {@code PerguntaResource#paginaDePerguntas} for a real example: 5 independent HTTP calls to
+     * the oracle API, fired in parallel instead of sequentially).
+     * <p>
+     * {@link CompletableFuture#join()} throws {@link java.util.concurrent.CompletionException} (a
+     * {@code RuntimeException}) if the future completed exceptionally, without unwrapping it —
+     * that's deliberate: a caller that wants a per-prop fallback instead of failing the whole
+     * request can already get one two ways — attach {@code .exceptionally(...)} to the future
+     * itself before handing it to a prop (as {@code PerguntaResource} does, preserving its
+     * existing "oracle down, don't break the page" behavior unchanged), or let it propagate here
+     * and mark the prop {@link io.github.inertia4j.core.props.Rescuable}, which the existing
+     * try/catch around {@link #resolveIfNeeded} in {@link #resolveProp} already handles — no
+     * CompletableFuture-specific rescue logic was needed.
+     */
     private static Object resolveIfNeeded(Object value) {
-        return value instanceof ResolvableProp ? ((ResolvableProp) value).resolve() : value;
+        Object resolved = value instanceof ResolvableProp ? ((ResolvableProp) value).resolve() : value;
+        return resolved instanceof CompletableFuture ? ((CompletableFuture<?>) resolved).join() : resolved;
     }
 
     /**
