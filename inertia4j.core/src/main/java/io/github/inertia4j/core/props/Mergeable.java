@@ -28,9 +28,43 @@ public interface Mergeable {
     boolean shouldMerge();
 
     /**
-     * @return the merge strategy for this prop.
+     * @return the merge strategy for this prop, applied at the root of its value — only
+     *         consulted when {@link #getAppendsAtPaths()} and {@link #getPrependsAtPaths()} are
+     *         both empty (see {@link #mergesAtRoot()}).
      */
     Strategy getMergeStrategy();
+
+    /**
+     * Sub-paths, relative to this prop's own value, whose arrays should be appended to instead of
+     * the prop's root. This is what lets a paginator-shaped prop merge only its item list
+     * ({@code "data"}) while its sibling pagination fields are replaced wholesale — the shape
+     * {@code ScrollProp} relies on. Mirrors {@code MergesProps::appendsAtPaths()}.
+     *
+     * @return relative append paths; empty when this prop merges at its own root.
+     */
+    default List<String> getAppendsAtPaths() {
+        return List.of();
+    }
+
+    /**
+     * Sub-paths, relative to this prop's own value, whose arrays should be prepended to instead
+     * of the prop's root. Mirrors {@code MergesProps::prependsAtPaths()}.
+     *
+     * @return relative prepend paths; empty when this prop merges at its own root.
+     */
+    default List<String> getPrependsAtPaths() {
+        return List.of();
+    }
+
+    /**
+     * Mirrors {@code MergesProps::mergesAtRoot()}: naming any sub-path at all moves the merge off
+     * this prop's root, and {@link #getMergeStrategy()} stops applying to the root.
+     *
+     * @return whether this prop merges at the root of its own value.
+     */
+    default boolean mergesAtRoot() {
+        return getAppendsAtPaths().isEmpty() && getPrependsAtPaths().isEmpty();
+    }
 
     /**
      * Paths, relative to this prop's own value, identifying the field used to match existing

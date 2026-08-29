@@ -54,6 +54,16 @@ abstract class AbstractProp<T extends AbstractProp<T>> implements ResolvableProp
     }
 
     @Override
+    public List<String> getAppendsAtPaths() {
+        return state.appendsAtPaths;
+    }
+
+    @Override
+    public List<String> getPrependsAtPaths() {
+        return state.prependsAtPaths;
+    }
+
+    @Override
     public boolean shouldResolveOnce() {
         return state.once;
     }
@@ -93,6 +103,34 @@ abstract class AbstractProp<T extends AbstractProp<T>> implements ResolvableProp
      */
     public T deepMerge() {
         return withState(state.withMerge(Strategy.DEEP));
+    }
+
+    /**
+     * Merges by appending into arrays found at {@code paths} <em>inside</em> this prop's value,
+     * instead of at its root — for a paginator-shaped value like
+     * {@code {"data": [...], "nextPage": 3}}, {@code append("data")} grows the item list while
+     * the pagination fields around it are replaced wholesale.
+     *
+     * <p>
+     * Named {@code appendAt} rather than overloading {@link #merge()}/{@link #prepend()} the way
+     * PHP's {@code append(bool|string $path)} does — Java can't dispatch a no-arg call and a
+     * string call onto one varargs method without the two reading ambiguously at the call site.
+     *
+     * @param paths one or more paths relative to this prop's own value.
+     * @return this prop, also merged by appending at {@code paths}.
+     */
+    public T appendAt(String... paths) {
+        return withState(state.withMerge(Strategy.APPEND).withAppendsAtPaths(List.of(paths)));
+    }
+
+    /**
+     * The prepend counterpart of {@link #appendAt(String...)}.
+     *
+     * @param paths one or more paths relative to this prop's own value.
+     * @return this prop, also merged by prepending at {@code paths}.
+     */
+    public T prependAt(String... paths) {
+        return withState(state.withMerge(Strategy.PREPEND).withPrependsAtPaths(List.of(paths)));
     }
 
     /**

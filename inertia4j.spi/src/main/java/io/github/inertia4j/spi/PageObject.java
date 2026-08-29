@@ -22,6 +22,7 @@ public class PageObject {
     private final Map<String, List<String>> deferredProps;
     private final MergeInstructions mergeInstructions;
     private final List<String> rescuedProps;
+    private final Map<String, ScrollMetadata> scrollProps;
     private final Map<String, OnceMetadata> onceProps;
 
     /**
@@ -45,6 +46,10 @@ public class PageObject {
      * @param rescuedProps keys of props whose resolution threw and was swallowed. Empty when none
      *                     — a {@link PageObjectSerializer} is expected to omit the field entirely
      *                     in that case.
+     * @param scrollProps infinite-scroll pagination metadata, keyed by the dotted path of the
+     *                    scroll prop it describes. Empty when none — a
+     *                    {@link PageObjectSerializer} is expected to omit the field entirely in
+     *                    that case.
      * @param onceProps once-cached props on this page, keyed by their (custom or default) cache
      *                  key. Empty when none — a {@link PageObjectSerializer} is expected to omit
      *                  the field entirely in that case.
@@ -59,6 +64,7 @@ public class PageObject {
         Map<String, List<String>> deferredProps,
         MergeInstructions mergeInstructions,
         List<String> rescuedProps,
+        Map<String, ScrollMetadata> scrollProps,
         Map<String, OnceMetadata> onceProps
     ) {
         this.component = component;
@@ -70,6 +76,7 @@ public class PageObject {
         this.deferredProps = deferredProps;
         this.mergeInstructions = mergeInstructions;
         this.rescuedProps = rescuedProps;
+        this.scrollProps = scrollProps;
         this.onceProps = onceProps;
     }
 
@@ -195,6 +202,19 @@ public class PageObject {
      */
     public List<String> getRescuedProps() {
         return rescuedProps;
+    }
+
+    /**
+     * Gets the infinite-scroll pagination metadata announced for this page, keyed by the dotted
+     * path of the scroll prop each entry describes — so the client's infinite-scroll component
+     * knows which page identifier to request next (or previously), and whether to reset what it
+     * has accumulated.
+     *
+     * @return scroll metadata by prop path; empty when none.
+     * @see <a href="https://inertiajs.com/infinite-scrolling">Inertia infinite scrolling</a>
+     */
+    public Map<String, ScrollMetadata> getScrollProps() {
+        return scrollProps;
     }
 
     /**

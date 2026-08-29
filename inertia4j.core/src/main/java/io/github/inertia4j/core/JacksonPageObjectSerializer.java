@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.inertia4j.spi.PageObject;
 import io.github.inertia4j.spi.PageObjectSerializer;
+import io.github.inertia4j.spi.ScrollMetadata;
 import io.github.inertia4j.spi.SerializationException;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -25,7 +26,7 @@ public class JacksonPageObjectSerializer implements PageObjectSerializer {
      */
     private static final List<String> OMIT_WHEN_EMPTY = List.of(
         "deferredProps", "mergeProps", "prependProps", "deepMergeProps", "matchPropsOn",
-        "rescuedProps", "onceProps"
+        "rescuedProps", "scrollProps", "onceProps"
     );
 
     /**
@@ -37,9 +38,17 @@ public class JacksonPageObjectSerializer implements PageObjectSerializer {
     @JsonPropertyOrder({
         "component", "props", "url", "version", "encryptHistory", "clearHistory",
         "deferredProps", "mergeProps", "prependProps", "deepMergeProps", "matchPropsOn",
-        "rescuedProps", "onceProps"
+        "rescuedProps", "scrollProps", "onceProps"
     })
     private interface PageObjectPropertyOrder {
+    }
+
+    /**
+     * Pins the field order of each {@code scrollProps} entry, for the same reason (and by the
+     * same means) as {@link PageObjectPropertyOrder}.
+     */
+    @JsonPropertyOrder({"pageName", "previousPage", "nextPage", "currentPage", "reset"})
+    private interface ScrollMetadataPropertyOrder {
     }
 
     /**
@@ -48,7 +57,8 @@ public class JacksonPageObjectSerializer implements PageObjectSerializer {
      */
     private final ObjectMapper objectMapper = new ObjectMapper()
         .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true)
-        .addMixIn(PageObject.class, PageObjectPropertyOrder.class);
+        .addMixIn(PageObject.class, PageObjectPropertyOrder.class)
+        .addMixIn(ScrollMetadata.class, ScrollMetadataPropertyOrder.class);
 
     /**
      * {@inheritDoc}

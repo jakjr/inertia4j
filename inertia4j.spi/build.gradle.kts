@@ -14,7 +14,7 @@ java {
 }
 
 group = "io.github.inertia4j"
-version = "1.0.2-jakjr.3"
+version = "1.0.2-jakjr.4"
 
 dependencies {
     api("org.jspecify:jspecify:1.0.0")

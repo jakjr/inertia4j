@@ -3,10 +3,13 @@ package io.github.inertia4j.core;
 import io.github.inertia4j.core.props.Deferrable;
 import io.github.inertia4j.core.props.Mergeable;
 import io.github.inertia4j.core.props.Onceable;
+import io.github.inertia4j.core.props.ProvidesScrollMetadata;
 import io.github.inertia4j.core.props.Rescuable;
 import io.github.inertia4j.core.props.ResolvableProp;
+import io.github.inertia4j.core.props.ScrollProp;
 import io.github.inertia4j.spi.MergeInstructions;
 import io.github.inertia4j.spi.OnceMetadata;
+import io.github.inertia4j.spi.ScrollMetadata;
 import io.github.inertia4j.spi.PageObject;
 import io.github.inertia4j.spi.PageObjectSerializer;
 import io.github.inertia4j.spi.SerializationException;
@@ -206,6 +209,7 @@ public class InertiaRenderer {
             ctx.deferredProps,
             new MergeInstructions(ctx.mergeProps, ctx.prependProps, ctx.deepMergeProps, ctx.matchPropsOn),
             ctx.rescuedProps,
+            ctx.scrollProps,
             ctx.onceProps
         );
     }
@@ -230,6 +234,7 @@ public class InertiaRenderer {
         final List<String> exceptPaths;
         final List<String> resetPaths;
         final List<String> exceptOncePaths;
+        final boolean prependScrollIntent;
 
         final Map<String, List<String>> deferredProps = new LinkedHashMap<>();
         final List<String> mergeProps = new ArrayList<>();
@@ -237,6 +242,7 @@ public class InertiaRenderer {
         final List<String> deepMergeProps = new ArrayList<>();
         final List<String> matchPropsOn = new ArrayList<>();
         final List<String> rescuedProps = new ArrayList<>();
+        final Map<String, ScrollMetadata> scrollProps = new LinkedHashMap<>();
         final Map<String, OnceMetadata> onceProps = new LinkedHashMap<>();
 
         ResolutionContext(HttpRequest request, String componentName) {
@@ -249,6 +255,11 @@ public class InertiaRenderer {
             this.resetPaths = reset != null ? reset : List.of();
             List<String> exceptOnce = parseCsvHeader(request, "X-Inertia-Except-Once-Props");
             this.exceptOncePaths = exceptOnce != null ? exceptOnce : List.of();
+            // Anything other than the literal "prepend" means append — including the header being
+            // absent, which is the ordinary scroll-down case (mirrors ScrollProp's
+            // `=== 'prepend' ? prepend(...) : append(...)`).
+            this.prependScrollIntent =
+                "prepend".equals(request.getHeader("X-Inertia-Infinite-Scroll-Merge-Intent"));
         }
     }
 
@@ -359,6 +370,16 @@ public class InertiaRenderer {
             }
         }
 
+        // The client decides the scroll direction per request, so the prop only learns where (and
+        // which way) it merges here, right before resolving — mirroring where resolveValue()
+        // calls configureMergeIntent() in the Laravel source. Note this is deliberately NOT done
+        // in the deferred branch above, exactly as in Laravel: a scroll prop deferred out of the
+        // initial response announces a plain root-level merge there, and only gets its real
+        // wrapper-scoped instruction on the follow-up request that actually carries an intent.
+        if (prop instanceof ScrollProp) {
+            prop = ((ScrollProp) prop).configureMergeIntent(ctx.prependScrollIntent);
+        }
+
         boolean shouldRescue = prop instanceof Rescuable && ((Rescuable) prop).shouldRescue();
         Object value;
         try {
@@ -373,6 +394,9 @@ public class InertiaRenderer {
 
         if (prop instanceof Mergeable) {
             recordMergeInstructions(path, (Mergeable) prop, ctx);
+        }
+        if (prop instanceof ScrollProp) {
+            recordScrollMetadata(path, (ScrollProp) prop, value, ctx);
         }
         if (prop instanceof Onceable) {
             recordOnceMetadata(path, (Onceable) prop, ctx);
@@ -455,20 +479,54 @@ public class InertiaRenderer {
         if (ctx.isPartial && !isIncludedInPartialMetadata(path, ctx)) {
             return;
         }
-        switch (mergeable.getMergeStrategy()) {
-            case APPEND:
-                ctx.mergeProps.add(path);
-                break;
-            case PREPEND:
+        // Mirrors collectMergeableMetadata()'s branch order: a deep merge wins outright, then a
+        // root-level append/prepend, and only when the prop named sub-paths to merge at (as a
+        // ScrollProp does with its wrapper) does each of those become its own instruction.
+        if (mergeable.getMergeStrategy() == Mergeable.Strategy.DEEP) {
+            ctx.deepMergeProps.add(path);
+        } else if (mergeable.mergesAtRoot()) {
+            if (mergeable.getMergeStrategy() == Mergeable.Strategy.PREPEND) {
                 ctx.prependProps.add(path);
-                break;
-            case DEEP:
-                ctx.deepMergeProps.add(path);
-                break;
+            } else {
+                ctx.mergeProps.add(path);
+            }
+        } else {
+            for (String appendPath : mergeable.getAppendsAtPaths()) {
+                ctx.mergeProps.add(path + "." + appendPath);
+            }
+            for (String prependPath : mergeable.getPrependsAtPaths()) {
+                ctx.prependProps.add(path + "." + prependPath);
+            }
         }
         for (String relativePath : mergeable.getMatchOn()) {
             ctx.matchPropsOn.add(path + "." + relativePath);
         }
+    }
+
+    /**
+     * Mirrors {@code collectScrollMetadata()}: announces {@code prop}'s pagination cursor under
+     * {@code scrollProps}, keyed by its path, plus whether {@code X-Inertia-Reset} named it (in
+     * which case the client throws away the pages it had accumulated instead of growing them).
+     * <p>
+     * Unlike merge and once metadata, this is recorded unconditionally for an included scroll
+     * prop — no partial-metadata filter — again matching the Laravel source: a scroll prop that
+     * made it this far <em>is</em> in the response, and the client cannot paginate it without
+     * knowing where it currently stands.
+     */
+    private static void recordScrollMetadata(
+        String path,
+        ScrollProp prop,
+        Object resolvedValue,
+        ResolutionContext ctx
+    ) {
+        ProvidesScrollMetadata metadata = prop.getScrollMetadata(resolvedValue);
+        ctx.scrollProps.put(path, new ScrollMetadata(
+            metadata.getPageName(),
+            metadata.getPreviousPage(),
+            metadata.getNextPage(),
+            metadata.getCurrentPage(),
+            ctx.resetPaths.contains(path)
+        ));
     }
 
     /**

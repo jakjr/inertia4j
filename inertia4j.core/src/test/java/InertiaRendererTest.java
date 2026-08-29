@@ -2,6 +2,8 @@ import io.github.inertia4j.core.*;
 import io.github.inertia4j.core.props.DeferProp;
 import io.github.inertia4j.core.props.MergeProp;
 import io.github.inertia4j.core.props.OnceProp;
+import io.github.inertia4j.core.props.ScrollPage;
+import io.github.inertia4j.core.props.ScrollProp;
 import io.github.inertia4j.spi.PageObjectSerializer;
 import org.junit.jupiter.api.Test;
 
@@ -551,6 +553,174 @@ public class InertiaRendererTest {
         HttpResponse response = render(httpRequest, options);
 
         var expectedJson = "{\"component\":\"Component\",\"props\":{\"widgets\":[]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"deferredProps\":{\"default\":[\"widgets.0\"]}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withScrollProp_mergesAtWrapperAndAnnouncesPagination() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "posts", new ScrollProp(
+                () -> Map.of("data", List.of("Post 1")),
+                ScrollPage.numbered("pagina", 1, true)
+            )
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // O merge acontece em "posts.data" (o wrapper), nao em "posts": a lista de itens cresce
+        // enquanto os campos de paginacao ao redor dela sao substituidos pelos desta resposta.
+        // previousPage null por estar na primeira pagina; nextPage 2 porque ainda ha mais.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"posts\":{\"data\":[\"Post 1\"]}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"mergeProps\":[\"posts.data\"],\"scrollProps\":{\"posts\":{\"pageName\":\"pagina\",\"previousPage\":null,\"nextPage\":2,\"currentPage\":1,\"reset\":false}}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withScrollProp_prependIntent_prependsInsteadOfAppending() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "posts",
+            "X-Inertia-Infinite-Scroll-Merge-Intent", "prepend"
+        ));
+        Map<String, Object> props = Map.of(
+            "posts", new ScrollProp(
+                () -> Map.of("data", List.of("Post 0")),
+                ScrollPage.numbered("pagina", 2, true)
+            )
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // Rolando pra cima o cliente manda "prepend" e o mesmo prop passa a instruir prependProps.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"posts\":{\"data\":[\"Post 0\"]}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"prependProps\":[\"posts.data\"],\"scrollProps\":{\"posts\":{\"pageName\":\"pagina\",\"previousPage\":1,\"nextPage\":3,\"currentPage\":2,\"reset\":false}}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withScrollProp_lastPage_announcesNullNextPage() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "posts", new ScrollProp(
+                () -> Map.of("data", List.of("Post 9")),
+                ScrollPage.numbered("pagina", 3, false)
+            )
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // nextPage null e como o cliente sabe que acabou — nao ha flag "temMais" no protocolo.
+        assertTrue(response.getBody().contains("\"scrollProps\":{\"posts\":{\"pageName\":\"pagina\",\"previousPage\":2,\"nextPage\":null,\"currentPage\":3,\"reset\":false}}"));
+    }
+
+    @Test
+    void render_withScrollProp_resetHeader_flagsResetAndDropsMergeInstruction() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "posts",
+            "X-Inertia-Reset", "posts"
+        ));
+        Map<String, Object> props = Map.of(
+            "posts", new ScrollProp(
+                () -> Map.of("data", List.of("Post 1")),
+                ScrollPage.numbered("pagina", 1, true)
+            )
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // X-Inertia-Reset zera a instrucao de merge (o cliente substitui) e o scrollProps sinaliza
+        // reset:true pro componente de scroll infinito recomecar a paginacao.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"posts\":{\"data\":[\"Post 1\"]}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"scrollProps\":{\"posts\":{\"pageName\":\"pagina\",\"previousPage\":null,\"nextPage\":2,\"currentPage\":1,\"reset\":true}}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withScrollProp_matchOn_prefixesPathsWithPropNotWrapper() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "posts", new ScrollProp(
+                () -> Map.of("data", List.of(Map.of("id", 1))),
+                ScrollPage.numbered("pagina", 1, false)
+            ).matchOn("data.id")
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // matchPropsOn e sempre "<path do prop>.<path relativo>" — o wrapper nao entra sozinho,
+        // por isso o relativo aqui precisa ser "data.id" e nao so "id".
+        assertTrue(response.getBody().contains("\"matchPropsOn\":[\"posts.data.id\"]"));
+    }
+
+    @Test
+    void render_withDeferredScrollProp_onFullVisit_announcesGroupWithoutResolving() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "posts", new ScrollProp(
+                () -> { throw new AssertionError("scroll prop deferido nao deveria resolver"); },
+                ScrollPage.numbered("pagina", 1, true)
+            ).defer()
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // Sem scrollProps: o cursor so e anunciado quando o valor de fato vai na resposta. O
+        // mergeProps sai no path raiz ("posts", nao "posts.data") porque a intencao de merge so e
+        // aplicada na hora de resolver — mesma sequencia do PropsResolver.php real.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"deferredProps\":{\"default\":[\"posts\"]},\"mergeProps\":[\"posts\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withScrollProp_metadataDerivedFromResolvedValue() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> pagina = Map.of("data", List.of("Post 1"), "numero", 4);
+        Map<String, Object> props = Map.of(
+            "posts", new ScrollProp(
+                () -> pagina,
+                "data",
+                resolvido -> {
+                    @SuppressWarnings("unchecked")
+                    int numero = (int) ((Map<String, Object>) resolvido).get("numero");
+                    return ScrollPage.numbered("pagina", numero, false);
+                }
+            )
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // O provedor recebe o valor ja resolvido, entao um objeto de paginacao que carrega o
+        // proprio estado nao precisa ser repetido a mao no render.
+        assertTrue(response.getBody().contains("\"currentPage\":4"));
+    }
+
+    @Test
+    void render_withScrollProp_onPartialReloadForAnotherProp_isNotAnnouncedAtAll() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "user"
+        ));
+        Map<String, Object> props = Map.of(
+            "user", "test",
+            "posts", new ScrollProp(
+                () -> { throw new AssertionError("prop fora do only-list nao deveria resolver"); },
+                ScrollPage.numbered("pagina", 1, true)
+            )
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
         assertEquals(expectedJson, response.getBody());
     }
 
