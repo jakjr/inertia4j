@@ -499,6 +499,61 @@ public class InertiaRendererTest {
         assertEquals(expectedJson, response.getBody());
     }
 
+    @Test
+    void render_withEmptyPartialDataHeader_isTreatedAsNoOnlyFilter() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "  ,  "
+        ));
+        Map<String, Object> props = Map.of("user", "test");
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // Um only-list vazio nao significa "o cliente pediu zero props" (o que esvaziaria a
+        // pagina inteira) — significa que nao veio filtro nenhum, igual ao `?: null` do
+        // PropsResolver::parseHeader() do Laravel.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"user\":\"test\"},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withPropWrapperInsideList_resolvesItAndPrefixesPathWithIndex() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "secoes", List.of(
+                Map.of("titulo", "Primeira"),
+                Map.of("titulo", "Segunda", "itens", new MergeProp(List.of("Item 1")))
+            )
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        // O PropsResolver do Laravel recursa em qualquer array (PHP nao separa lista de mapa),
+        // entao um wrapper de prop dentro de uma lista tambem resolve — e seu path carrega o
+        // indice, como as chaves numericas que o PHP produziria.
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"secoes\":[{\"titulo\":\"Primeira\"},{\"itens\":[\"Item 1\"],\"titulo\":\"Segunda\"}]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"mergeProps\":[\"secoes.1.itens\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withDeferredPropInsideList_isAnnouncedByIndexedPathAndNotResolved() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of(
+            "widgets", List.of(new DeferProp(() -> {
+                throw new AssertionError("deferred prop aninhado numa lista nao deveria resolver");
+            }))
+        );
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"widgets\":[]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"deferredProps\":{\"default\":[\"widgets.0\"]}}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
     private HttpResponse render(HttpRequest request, InertiaRenderingOptions options) {
         return new InertiaRenderer(
             pageObjectSerializer,

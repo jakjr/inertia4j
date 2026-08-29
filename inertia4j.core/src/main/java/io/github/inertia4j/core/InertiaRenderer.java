@@ -25,6 +25,12 @@ import java.util.stream.Collectors;
  * It handles full page loads, partial updates, asset versioning, and redirects according to the Inertia protocol.
  */
 public class InertiaRenderer {
+    /**
+     * Returned by {@link #resolveProp} instead of a value, for a prop that must not appear in the
+     * response at all — distinct from {@code null}, which is a legitimate resolved prop value.
+     */
+    private static final Object SKIP = new Object();
+
     private final PageObjectSerializer pageObjectSerializer;
     private final TemplateRenderer templateRenderer;
     private final Supplier<String> versionProvider;
@@ -276,73 +282,120 @@ public class InertiaRenderer {
         Map<String, Object> result = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : props.entrySet()) {
             String key = entry.getKey();
-            Object prop = entry.getValue();
             String path = prefix.isEmpty() ? key : prefix + "." + key;
-
-            if (!shouldInclude(path, parentWasResolved, ctx)) {
-                continue;
-            }
-
-            // Full visit only (mirrors excludeFromInitialResponse: only ever consulted when
-            // !isPartial — a client explicitly asking for a prop again via a partial reload
-            // gets it resolved fresh regardless of any cached copy it claims to have).
-            if (!ctx.isPartial) {
-                // A Deferrable prop is never resolved now, only announced — unless the client
-                // already has a fresh once-cached copy, in which case it isn't even announced
-                // (nothing to fetch: the client already has what it needs).
-                if (prop instanceof Deferrable && ((Deferrable) prop).shouldDefer()) {
-                    if (!wasAlreadyLoadedByClient(prop, path, ctx)) {
-                        String group = ((Deferrable) prop).getGroup();
-                        ctx.deferredProps.computeIfAbsent(group, g -> new ArrayList<>()).add(path);
-                    }
-                    if (prop instanceof Mergeable) {
-                        recordMergeInstructions(path, (Mergeable) prop, ctx);
-                    }
-                    if (prop instanceof Onceable) {
-                        recordOnceMetadata(path, (Onceable) prop, ctx);
-                    }
-                    continue;
-                }
-                // Not deferred, but the client already has a fresh once-cached copy: skip
-                // resolving it (still announced under onceProps so the client's cache entry
-                // survives, matching the expiry/key it was given the first time).
-                if (ctx.isInertiaRequest && wasAlreadyLoadedByClient(prop, path, ctx)) {
-                    if (prop instanceof Onceable) {
-                        recordOnceMetadata(path, (Onceable) prop, ctx);
-                    }
-                    continue;
-                }
-            }
-
-            boolean shouldRescue = prop instanceof Rescuable && ((Rescuable) prop).shouldRescue();
-            Object value;
-            try {
-                value = resolveIfNeeded(prop);
-            } catch (RuntimeException e) {
-                if (!shouldRescue) {
-                    throw e;
-                }
-                ctx.rescuedProps.add(path);
-                continue;
-            }
-
-            if (prop instanceof Mergeable) {
-                recordMergeInstructions(path, (Mergeable) prop, ctx);
-            }
-            if (prop instanceof Onceable) {
-                recordOnceMetadata(path, (Onceable) prop, ctx);
-            }
-
-            if (value instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> nested = (Map<String, Object>) value;
-                boolean childParentWasResolved = parentWasResolved || !(prop instanceof Map);
-                result.put(key, resolveProps(nested, path, childParentWasResolved, ctx));
-            } else {
+            Object value = resolveProp(entry.getValue(), path, parentWasResolved, ctx);
+            if (value != SKIP) {
                 result.put(key, value);
             }
         }
         return result;
+    }
+
+    /**
+     * Same as {@link #resolveProps} but for a {@code List} value. PHP makes no distinction
+     * between a map and a list, so {@code PropsResolver::resolveProps()}'s single {@code is_array}
+     * recursion covers both — meaning a prop wrapper nested inside a list resolves there just
+     * like one nested inside a map. Java needs the two cases spelled out separately to keep a
+     * list serializing as a JSON array; element paths use the index ({@code "posts.0"}), matching
+     * the numeric keys PHP would produce.
+     */
+    private List<Object> resolveList(
+        List<?> items,
+        String prefix,
+        boolean parentWasResolved,
+        ResolutionContext ctx
+    ) {
+        List<Object> result = new ArrayList<>(items.size());
+        int index = 0;
+        for (Object item : items) {
+            String path = prefix + "." + index++;
+            Object value = resolveProp(item, path, parentWasResolved, ctx);
+            if (value != SKIP) {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Resolves a single prop found at {@code path}, collecting its metadata, or returns
+     * {@link #SKIP} to signal that it must not appear in the response at all (filtered out by
+     * the partial reload, deferred to a follow-up request, already cached client-side, or
+     * rescued after throwing).
+     */
+    private Object resolveProp(Object prop, String path, boolean parentWasResolved, ResolutionContext ctx) {
+        if (!shouldInclude(path, parentWasResolved, ctx)) {
+            return SKIP;
+        }
+
+        // Full visit only (mirrors excludeFromInitialResponse: only ever consulted when
+        // !isPartial — a client explicitly asking for a prop again via a partial reload
+        // gets it resolved fresh regardless of any cached copy it claims to have).
+        if (!ctx.isPartial) {
+            // A Deferrable prop is never resolved now, only announced — unless the client
+            // already has a fresh once-cached copy, in which case it isn't even announced
+            // (nothing to fetch: the client already has what it needs).
+            if (prop instanceof Deferrable && ((Deferrable) prop).shouldDefer()) {
+                if (!wasAlreadyLoadedByClient(prop, path, ctx)) {
+                    String group = ((Deferrable) prop).getGroup();
+                    ctx.deferredProps.computeIfAbsent(group, g -> new ArrayList<>()).add(path);
+                }
+                if (prop instanceof Mergeable) {
+                    recordMergeInstructions(path, (Mergeable) prop, ctx);
+                }
+                if (prop instanceof Onceable) {
+                    recordOnceMetadata(path, (Onceable) prop, ctx);
+                }
+                return SKIP;
+            }
+            // Not deferred, but the client already has a fresh once-cached copy: skip
+            // resolving it (still announced under onceProps so the client's cache entry
+            // survives, matching the expiry/key it was given the first time).
+            if (ctx.isInertiaRequest && wasAlreadyLoadedByClient(prop, path, ctx)) {
+                if (prop instanceof Onceable) {
+                    recordOnceMetadata(path, (Onceable) prop, ctx);
+                }
+                return SKIP;
+            }
+        }
+
+        boolean shouldRescue = prop instanceof Rescuable && ((Rescuable) prop).shouldRescue();
+        Object value;
+        try {
+            value = resolveIfNeeded(prop);
+        } catch (RuntimeException e) {
+            if (!shouldRescue) {
+                throw e;
+            }
+            ctx.rescuedProps.add(path);
+            return SKIP;
+        }
+
+        if (prop instanceof Mergeable) {
+            recordMergeInstructions(path, (Mergeable) prop, ctx);
+        }
+        if (prop instanceof Onceable) {
+            recordOnceMetadata(path, (Onceable) prop, ctx);
+        }
+
+        // A value that was produced by resolving a wrapper/callback (rather than having been a
+        // plain container all along) was requested as a whole, so its children bypass further
+        // only/except filtering — mirrors `$parentWasResolved || ! is_array($prop)`.
+        boolean childParentWasResolved = parentWasResolved || !isContainer(prop);
+        if (value instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> nested = (Map<String, Object>) value;
+            return resolveProps(nested, path, childParentWasResolved, ctx);
+        }
+        if (value instanceof List) {
+            return resolveList((List<?>) value, path, childParentWasResolved, ctx);
+        }
+        return value;
+    }
+
+    /** Whether {@code prop} is one of the container shapes {@link #resolveProp} recurses into. */
+    private static boolean isContainer(Object prop) {
+        return prop instanceof Map || prop instanceof List;
     }
 
     /**
@@ -480,19 +533,23 @@ public class InertiaRenderer {
      *
      * @param request the incoming HTTP request.
      * @param headerName the header to read.
-     * @return the parsed list, or {@code null} if the header is absent — callers rely on this
-     *         {@code null} to distinguish "no partial reload at all" from "partial reload naming
-     *         zero props".
+     * @return the parsed list, or {@code null} if the header is absent <em>or names nothing</em> —
+     *         callers rely on this {@code null} to mean "no filter at all". Mirrors
+     *         {@code PropsResolver::parseHeader()}, whose {@code array_filter(...) ?: null}
+     *         collapses an empty/blank header to {@code null} too: a present-but-empty
+     *         {@code X-Inertia-Partial-Data} must not be read as "the client asked for zero
+     *         props" (which would strip the whole page), it means the client sent no only-list.
      */
     private static List<String> parseCsvHeader(HttpRequest request, String headerName) {
         String header = request.getHeader(headerName);
         if (header == null) {
             return null;
         }
-        return Arrays.stream(header.split(","))
+        List<String> values = Arrays.stream(header.split(","))
             .map(String::trim)
             .filter(s -> !s.isEmpty())
             .collect(Collectors.toList());
+        return values.isEmpty() ? null : values;
     }
 
     /**
