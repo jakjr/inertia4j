@@ -197,9 +197,20 @@ public class InertiaRenderer {
      * @return A configured {@link PageObject}.
      */
     private PageObject pageObjectFromOptions(HttpRequest request, InertiaRenderingOptions options) {
+        Map<String, Object> sharedProps = options.sharedProps != null ? options.sharedProps : Map.of();
         Map<String, Object> rawProps = options.props != null ? options.props : Map.of();
+        // Mirrors PropsResolver::resolve()/merge_props(): shared data is merged in ahead of the
+        // page's own props — a key the page also sets wins, same as array_merge($shared, $props)
+        // — then resolved through the exact same recursive pass as any other prop (a shared value
+        // can be Deferrable/Mergeable/etc. too, unlike flash which never enters resolveProps at
+        // all). sharedPropKeys is captured from the unmerged map, before resolution touches it,
+        // since it announces which *top-level* keys came from sharing, not their resolved values.
+        Map<String, Object> mergedProps = new LinkedHashMap<>(sharedProps);
+        mergedProps.putAll(rawProps);
+        List<String> sharedPropKeys = List.copyOf(sharedProps.keySet());
+
         ResolutionContext ctx = new ResolutionContext(request, options.componentName);
-        Map<String, Object> resolvedProps = resolveProps(rawProps, "", false, ctx);
+        Map<String, Object> resolvedProps = resolveProps(mergedProps, "", false, ctx);
 
         return new PageObject(
             options.componentName,
@@ -213,7 +224,8 @@ public class InertiaRenderer {
             ctx.rescuedProps,
             ctx.scrollProps,
             ctx.onceProps,
-            options.flash != null ? options.flash : Map.of()
+            options.flash != null ? options.flash : Map.of(),
+            sharedPropKeys
         );
     }
 

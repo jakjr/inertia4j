@@ -1028,6 +1028,72 @@ public class InertiaRendererTest {
         assertEquals(expectedJson, response.getBody());
     }
 
+    @Test
+    void render_withoutSharedProps_omitsSharedPropsField() {
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("tarefas", List.of("Comprar leite"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"tarefas\":[\"Comprar leite\"]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withSharedProps_mergesIntoPropsAndAnnouncesTopLevelKeys() {
+        // Mirrors PropsResolver::resolve()/merge_props(): shared data is merged into props (not a
+        // second bucket the client has to know about) and the wire "sharedProps" field lists only
+        // the shared keys, like mergeProps/prependProps already list keys rather than values.
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("tarefas", List.of("Comprar leite"));
+        Map<String, Object> shared = Map.of("usuario", Map.of("nome", "Visitante"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props, Map.of(), shared);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"tarefas\":[\"Comprar leite\"],\"usuario\":{\"nome\":\"Visitante\"}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"sharedProps\":[\"usuario\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withSharedProps_pagePropWinsOnKeyCollision() {
+        // array_merge($shared, $props) in the real Response::toResponse() puts $props second, so
+        // a page-provided value for the same key overrides what was shared — never the other way.
+        var httpRequest = new FakeHttpRequest("GET", Map.of("X-Inertia", "true"));
+        Map<String, Object> props = Map.of("usuario", Map.of("nome", "Explícito"));
+        Map<String, Object> shared = Map.of("usuario", Map.of("nome", "Visitante"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props, Map.of(), shared);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"usuario\":{\"nome\":\"Explícito\"}},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"sharedProps\":[\"usuario\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
+    @Test
+    void render_withSharedProps_onPartialReload_valueIsFilteredButKeyStillAnnounced() {
+        // Unlike flash (never filtered) and unlike "errors" in the Quarkus adapter (wrapped in
+        // AlwaysProp on purpose), a shared prop is a plain value merged in before resolveProps()
+        // runs — so its VALUE goes through the exact same only/except filter as a page-provided
+        // prop. But resolveSharedProps() in the real PropsResolver::resolve() collects
+        // sharedPropKeys unconditionally, before that filtering ever runs — so the KEY is still
+        // announced under "sharedProps" even on a partial reload that drops the value itself.
+        var httpRequest = new FakeHttpRequest("GET", Map.of(
+            "X-Inertia", "true",
+            "X-Inertia-Partial-Component", "Component",
+            "X-Inertia-Partial-Data", "tarefas"
+        ));
+        Map<String, Object> props = Map.of("tarefas", List.of("Comprar leite"));
+        Map<String, Object> shared = Map.of("usuario", Map.of("nome", "Visitante"));
+        var options = new InertiaRenderingOptions(false, false, "/page", "Component", props, Map.of(), shared);
+
+        HttpResponse response = render(httpRequest, options);
+
+        var expectedJson = "{\"component\":\"Component\",\"props\":{\"tarefas\":[\"Comprar leite\"]},\"url\":\"/page\",\"version\":\"1\",\"encryptHistory\":false,\"clearHistory\":false,\"sharedProps\":[\"usuario\"]}";
+        assertEquals(expectedJson, response.getBody());
+    }
+
     private HttpResponse render(HttpRequest request, InertiaRenderingOptions options) {
         return new InertiaRenderer(
             pageObjectSerializer,
