@@ -127,6 +127,73 @@ dependencies {
 declará-las diretamente (na versão do BOM que seu app escolher), pra evitar duas cópias
 conflitantes na classpath.
 
+## Desenvolvimento local (editando a lib e um app consumidor ao mesmo tempo)
+
+Se você forkar este repo (ou só quiser evoluir a lib enquanto testa contra seu próprio app
+Quarkus), vai esbarrar num problema real: `quarkus:dev` **não** detecta sozinho quando um `.jar` de
+dependência muda no `~/.m2` — é preciso republicar (`publishToMavenLocal`) e reiniciar o
+`quarkus:dev` a cada alteração na lib
+([limitação documentada do Quarkus](https://github.com/quarkusio/quarkus/issues/27242), não falta
+de configuração). Isso é lento pra iterar em par com um app consumidor, especialmente quando os
+dois vivem em repositórios separados como aqui.
+
+**A solução (testada de ponta a ponta neste projeto — não é teoria)**: no `pom.xml` do app
+consumidor, adicione um profile Maven opt-in que compila `inertia4j.spi`/`core`/`quarkus` direto do
+código-fonte do checkout deste repo, como source roots extras do próprio módulo do app — sem
+`.jar`, sem publish nenhum. Como vira a mesma unidade de compilação do app, o live reload do
+`quarkus:dev` trata uma mudança na lib exatamente como mudança local, sem restart (confirmado: o
+`RuntimeUpdatesProcessor` do Quarkus loga o reload normalmente).
+
+```xml
+<!-- pom.xml do app consumidor -->
+<profiles>
+  <profile>
+    <id>local-inertia4j</id>
+    <build>
+      <plugins>
+        <plugin>
+          <groupId>org.codehaus.mojo</groupId>
+          <artifactId>build-helper-maven-plugin</artifactId>
+          <version>3.6.1</version>
+          <executions>
+            <execution>
+              <id>add-inertia4j-sources</id>
+              <phase>generate-sources</phase>
+              <goals><goal>add-source</goal></goals>
+              <configuration>
+                <sources>
+                  <source>${project.basedir}/../inertia4j/inertia4j.spi/src/main/java</source>
+                  <source>${project.basedir}/../inertia4j/inertia4j.core/src/main/java</source>
+                  <source>${project.basedir}/../inertia4j/inertia4j.quarkus/src/main/java</source>
+                </sources>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
+      </plugins>
+    </build>
+  </profile>
+</profiles>
+```
+
+Ative com `./mvnw -Plocal-inertia4j quarkus:dev`. Importante: as três dependências
+`io.github.inertia4j:inertia4j-{core,spi,quarkus}` **não podem estar declaradas** nesse profile (ou
+em qualquer lugar ativo junto com ele) — ter a classe simultaneamente como fonte compilada e dentro
+de um `.jar` no classpath é receita pra um `.jar` desatualizado silenciosamente ganhar de uma
+versão mais nova. A forma mais simples de garantir isso: mova essas três dependências pra dentro de
+um segundo profile (`activeByDefault=true`), mutuamente exclusivo com `local-inertia4j` — o Maven
+desativa sozinho um profile `activeByDefault` assim que outro é pedido na linha de comando. Exemplo
+completo, testado e funcionando, no
+[`pom.xml`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/tarefas-inertia/pom.xml) do
+`quarkus-inertia-lab` (profiles `published-inertia4j`/`local-inertia4j`) — copie a estrutura de lá.
+
+Isso é específico de Maven; se seu app consumidor for Gradle, o equivalente nativo é um
+[composite build](https://docs.gradle.org/current/userguide/composite_builds.html)
+(`includeBuild("../inertia4j")`) — o Quarkus tem suporte a live-reload de composite builds, mas
+há issues abertas específicas desse caminho (conflito de classloader quando o build incluído
+compartilha uma dependência com o projeto principal, entre outras) — menos testado em produção do
+que a rota Maven acima.
+
 ## Rodando os testes
 
 ```bash
