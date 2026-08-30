@@ -8,7 +8,7 @@
 <strong>v2/v3 completo</strong> e suporte a <strong>Quarkus</strong>.</p>
 
 <p>
-<img alt="version" src="https://img.shields.io/badge/inertia4j--core-1.5.0--jakjr.1-blue">
+<img alt="version" src="https://img.shields.io/badge/inertia4j--core-1.5.0-blue">
 <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-informational">
 <img alt="protocol" src="https://img.shields.io/badge/Inertia.js-v3%20protocol-9553E9?logo=inertia&logoColor=white">
 <img alt="tests" src="https://img.shields.io/badge/InertiaRendererTest-70%20casos-success">
@@ -85,6 +85,13 @@ módulo como dependência e serve de demo ponta a ponta).
 Este fork **não é publicado no Maven Central** — publique localmente e aponte seu projeto pras
 mesmas coordenadas. Pra um app Quarkus, publique os três (`core`/`spi`/`quarkus`):
 
+**Sobre os números de versão** (2026-08-30): sem sufixo `-jakjr.N` — os três módulos usam versão
+"limpa" (`1.5.0`, `1.3.0`, `1.0.0`), igual a qualquer lib publicada de verdade. Enquanto um recurso
+está em desenvolvimento ativo, a versão vira `X.Y.Z-SNAPSHOT` (cada `publishToMavenLocal` sobrescreve
+o `.jar` local, sem precisar bumpar nada) — só volta a um número redondo quando o trabalho é
+consolidado. Isso existe pra não ter que atualizar a seção de instalação (aqui embaixo) a cada
+commit — só quando uma versão de verdade sai.
+
 ```bash
 ./gradlew :inertia4j.core:publishToMavenLocal :inertia4j.spi:publishToMavenLocal :inertia4j.quarkus:publishToMavenLocal
 ```
@@ -96,9 +103,9 @@ se usar os prop types (`DeferProp`, `MergeProp`, `ScrollProp`, etc.) nos seus pr
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("io.github.inertia4j:inertia4j-quarkus:1.0.0-jakjr.1")
-    implementation("io.github.inertia4j:inertia4j-core:1.5.0-jakjr.1")
-    implementation("io.github.inertia4j:inertia4j-spi:1.3.0-jakjr.1")
+    implementation("io.github.inertia4j:inertia4j-quarkus:1.0.0")
+    implementation("io.github.inertia4j:inertia4j-core:1.5.0")
+    implementation("io.github.inertia4j:inertia4j-spi:1.3.0")
 }
 ```
 
@@ -107,17 +114,17 @@ dependencies {
 <dependency>
     <groupId>io.github.inertia4j</groupId>
     <artifactId>inertia4j-quarkus</artifactId>
-    <version>1.0.0-jakjr.1</version>
+    <version>1.0.0</version>
 </dependency>
 <dependency>
     <groupId>io.github.inertia4j</groupId>
     <artifactId>inertia4j-core</artifactId>
-    <version>1.5.0-jakjr.1</version>
+    <version>1.5.0</version>
 </dependency>
 <dependency>
     <groupId>io.github.inertia4j</groupId>
     <artifactId>inertia4j-spi</artifactId>
-    <version>1.3.0-jakjr.1</version>
+    <version>1.3.0</version>
 </dependency>
 ```
 

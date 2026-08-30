@@ -46,7 +46,7 @@ tasks.withType<Test> {
 }
 
 group = "io.github.inertia4j"
-version = "1.0.0-jakjr.1"
+version = "1.0.0"
 
 configure<PublishingExtension> {
     publications {
