@@ -60,7 +60,7 @@ consumidor [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab)
 `sharedProps`, flash). O que sua aplicação compartilha de fato — o equivalente a sobrescrever
 `HandleInertiaRequests::share()` — é responsabilidade do app, tipicamente um
 `ContainerRequestFilter` próprio (exemplo:
-[`InertiaSharedDataFilter`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/tarefas-inertia/src/main/java/io/github/inertia4j/quarkus/InertiaSharedDataFilter.java)
+[`InertiaSharedDataFilter`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/tarefas-inertia/src/main/java/org/acme/InertiaSharedDataFilter.java)
 em [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab)).
 
 ## Instalação
@@ -129,6 +129,19 @@ live reload do `quarkus:dev` trata uma mudança na lib como mudança local, sem 
 <profiles>
   <profile>
     <id>local-inertia4j</id>
+    <activation>
+      <property><name>inertia4j.local</name></property>
+    </activation>
+    <dependencies>
+      <!-- inertia4j.spi traz o jspecify como `api`; sem o jar do spi aqui, ele precisa ser
+           declarado, senão as fontes de spi/core não compilam (importam org.jspecify.annotations). -->
+      <dependency>
+        <groupId>org.jspecify</groupId>
+        <artifactId>jspecify</artifactId>
+        <version>1.0.0</version>
+        <scope>provided</scope>
+      </dependency>
+    </dependencies>
     <build>
       <plugins>
         <plugin>
@@ -156,13 +169,35 @@ live reload do `quarkus:dev` trata uma mudança na lib como mudança local, sem 
 </profiles>
 ```
 
-Ative com `./mvnw -Plocal-inertia4j quarkus:dev`. As três dependências
+Ative com `./mvnw -Dinertia4j.local quarkus:dev`. As três dependências
 `io.github.inertia4j:inertia4j-{core,spi,quarkus}` **não podem estar declaradas** nesse profile (ou
 em qualquer lugar ativo junto com ele) — ter a classe simultaneamente como fonte compilada e dentro
-de um `.jar` no classpath arrisca um `.jar` desatualizado ganhar de uma versão mais nova. A forma
-mais simples de garantir isso: mova essas três dependências pra dentro de um segundo profile
-(`activeByDefault=true`), mutuamente exclusivo com `local-inertia4j` — o Maven desativa sozinho um
-profile `activeByDefault` assim que outro é pedido na linha de comando. Exemplo completo no
+de um `.jar` no classpath arrisca um `.jar` desatualizado ganhar de uma versão mais nova. Pra
+garantir isso, mova essas três dependências pra dentro de um segundo profile mutuamente exclusivo,
+ativado pela *ausência* da mesma propriedade:
+
+```xml
+<profile>
+  <id>published-inertia4j</id>
+  <activation>
+    <property><name>!inertia4j.local</name></property>
+  </activation>
+  <dependencies><!-- inertia4j-core/spi/quarkus aqui --></dependencies>
+</profile>
+```
+
+**Não use `activeByDefault` pra isso**: o Maven desativa um profile `activeByDefault` assim que
+qualquer outro profile do mesmo POM ativa — por `-P` *ou* por propriedade. Num projeto Quarkus isso
+inclui o profile `native` gerado pelo arquétipo, que ativa em `-Dnative`: as dependências do
+Inertia4J somem justo do `./mvnw package -Dnative` e o build morre com `package
+io.github.inertia4j.core.props does not exist`. Ativação por propriedade negada não tem esse
+acoplamento.
+
+Pelo mesmo motivo o gatilho é `-Dinertia4j.local` e não `-Plocal-inertia4j`: é a propriedade que
+desliga o outro profile, então `-P` sozinho ativaria os dois. Vale uma regra do
+`maven-enforcer-plugin` (`requireProperty` em `inertia4j.local`) dentro do profile local pra
+transformar essa invocação errada num erro explicado em vez de um `.jar` velho ganhando em
+silêncio. Exemplo completo no
 [`pom.xml`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/tarefas-inertia/pom.xml) do
 `quarkus-inertia-lab` (profiles `published-inertia4j`/`local-inertia4j`).
 
