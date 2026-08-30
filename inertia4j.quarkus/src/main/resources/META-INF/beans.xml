@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="https://jakarta.ee/xml/ns/jakartaee"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="https://jakarta.ee/xml/ns/jakartaee https://jakarta.ee/xml/ns/jakartaee/beans_3_0.xsd"
+       bean-discovery-mode="annotated">
+    <!--
+    Marks this jar as a CDI bean archive so Quarkus indexes it and discovers Inertia/InertiaShared/
+    InertiaFlash/etc. as beans in a consuming app. Without this, Quarkus's simplified bean discovery
+    only scans the application's own classes plus dependencies that carry a beans.xml or a Jandex
+    index (or are explicitly named via quarkus.index-dependency) — a plain external jar is invisible
+    to it, and @Inject Inertia in a Resource would fail the build with an unsatisfied dependency.
+    -->
+</beans>
