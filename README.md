@@ -43,10 +43,9 @@ redirects). Este fork acrescenta, verificado contra o código-fonte real do
 | **Notação de ponto em chaves** | `"auth.user"` vira `{"auth": {"user": ...}}` — permite duas fontes independentes comporem o mesmo objeto sem se conhecerem |
 | **Valores assíncronos (`CompletableFuture`)** | Sem equivalente em PHP/Ruby — deixa vários props resolverem I/O em paralelo em vez de sequencialmente |
 
-70 casos em `InertiaRendererTest` cobrem tudo isso (`./gradlew :inertia4j.core:test`). Detalhes de
-design de cada recurso estão em [`plan.md`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/plan.md)
-e [`roadmap.md`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/roadmap.md), no projeto
-consumidor [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab).
+70 casos em `InertiaRendererTest` cobrem tudo isso (`./gradlew :inertia4j.core:test`). Uso real de
+cada recurso pode ser visto no projeto consumidor
+[`tarefas-inertia`](https://github.com/jakjr/tarefas-inertia).
 
 ## Frameworks suportados
 
@@ -60,8 +59,8 @@ consumidor [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab)
 `sharedProps`, flash). O que sua aplicação compartilha de fato — o equivalente a sobrescrever
 `HandleInertiaRequests::share()` — é responsabilidade do app, tipicamente um
 `ContainerRequestFilter` próprio (exemplo:
-[`InertiaSharedDataFilter`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/tarefas-inertia/src/main/java/org/acme/InertiaSharedDataFilter.java)
-em [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab)).
+[`InertiaSharedDataFilter`](https://github.com/jakjr/tarefas-inertia/blob/main/src/main/java/org/acme/InertiaSharedDataFilter.java)
+em [`tarefas-inertia`](https://github.com/jakjr/tarefas-inertia)).
 
 ## Instalação
 
@@ -198,8 +197,8 @@ desliga o outro profile, então `-P` sozinho ativaria os dois. Vale uma regra do
 `maven-enforcer-plugin` (`requireProperty` em `inertia4j.local`) dentro do profile local pra
 transformar essa invocação errada num erro explicado em vez de um `.jar` velho ganhando em
 silêncio. Exemplo completo no
-[`pom.xml`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/tarefas-inertia/pom.xml) do
-`quarkus-inertia-lab` (profiles `published-inertia4j`/`local-inertia4j`).
+[`pom.xml`](https://github.com/jakjr/tarefas-inertia/blob/main/pom.xml) do
+`tarefas-inertia` (profiles `published-inertia4j`/`local-inertia4j`).
 
 Pra um app consumidor Gradle, o equivalente é um
 [composite build](https://docs.gradle.org/current/userguide/composite_builds.html)
@@ -216,8 +215,7 @@ compartilha uma dependência com o projeto principal.
 ## Documentação herdada do projeto original
 
 - [Guia de uso avançado / como estender o Inertia4J](/docs/advanced.md)
-- [Roadmap original (pré-fork, até a v1.0)](/docs/roadmap.md) — histórico; o roadmap ativo deste
-  fork está em [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab)
+- [Roadmap original (pré-fork, até a v1.0)](/docs/roadmap.md) — histórico
 
 ## Licença e créditos
 
