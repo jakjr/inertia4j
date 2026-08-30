@@ -8,7 +8,7 @@
 <strong>v2/v3 completo</strong> e suporte a <strong>Quarkus</strong>.</p>
 
 <p>
-<img alt="version" src="https://img.shields.io/badge/inertia4j--core-1.5.0-blue">
+<img alt="version" src="https://img.shields.io/badge/inertia4j--core-1.5.0--SNAPSHOT-blue">
 <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-informational">
 <img alt="protocol" src="https://img.shields.io/badge/Inertia.js-v3%20protocol-9553E9?logo=inertia&logoColor=white">
 <img alt="tests" src="https://img.shields.io/badge/InertiaRendererTest-70%20casos-success">
@@ -20,26 +20,16 @@
 
 ## Sobre este fork
 
-Este é um fork independente de [`Inertia4J/inertia4j`](https://github.com/Inertia4J/inertia4j), a
-biblioteca original criada por [@edrd-f](https://github.com/edrd-f) e
-[@pefcos](https://github.com/pefcos) — **todo o crédito da concepção do projeto, da arquitetura
-inicial e do trabalho até a v1.0.4 é deles**. Este fork nasceu pra portar o Inertia4J pra Quarkus (o
-projeto oficial só cobre Spring e Ktor) e, no processo, acabou fechando um gap real de protocolo que
-a versão original nunca cobriu.
-
-**Por que um fork, e não um PR upstream**: o repositório original não recebe commit desde
-`2025-07-26` (mais de um ano), a última release é `v1.0.4` (2025-05-26), há um PR aberto desde
-maio/2026 sem revisão, e as próprias issues do projeto (`shared data`, `deferred props`, `prop
-merging`) pedem exatamente o que este fork já implementou — sem resposta de mantenedor. Diante
-disso, este fork segue como projeto independente: mesma licença (Apache 2.0), mesmo pacote
-(`io.github.inertia4j`), mas desenvolvido e versionado aqui.
+Fork de [`Inertia4J/inertia4j`](https://github.com/Inertia4J/inertia4j), criado por
+[@edrd-f](https://github.com/edrd-f) e [@pefcos](https://github.com/pefcos), acrescentando suporte
+a Quarkus (o projeto oficial cobre Spring e Ktor) e fechando o protocolo Inertia v2/v3 por
+completo. Mesma licença (Apache 2.0) e mesmo pacote (`io.github.inertia4j`) do projeto original.
 
 ## O que este fork acrescenta sobre a v1.0.4 original
 
-A v1.0.4 original já cobria o básico do protocolo (props, partial reloads, asset versioning,
-redirects). O que foi fechado neste fork, **verificado linha a linha contra o código-fonte real dos
-adapters de referência** (`inertia-laravel` e `inertia-rails` — não só a documentação do protocolo,
-que descreve o formato JSON mas não a lógica de resolução):
+A v1.0.4 original cobre o básico do protocolo (props, partial reloads, asset versioning,
+redirects). Este fork acrescenta, verificado contra o código-fonte real do
+`inertia-laravel`/`inertia-rails`:
 
 | Recurso | O que é |
 |---|---|
@@ -53,44 +43,30 @@ que descreve o formato JSON mas não a lógica de resolução):
 | **Notação de ponto em chaves** | `"auth.user"` vira `{"auth": {"user": ...}}` — permite duas fontes independentes comporem o mesmo objeto sem se conhecerem |
 | **Valores assíncronos (`CompletableFuture`)** | Sem equivalente em PHP/Ruby — deixa vários props resolverem I/O em paralelo em vez de sequencialmente |
 
-70 casos em `InertiaRendererTest` cobrem tudo isso (`./gradlew :inertia4j.core:test`). O histórico
-completo — cada decisão de design, cada divergência encontrada contra o código-fonte real, cada bug
-achado em revisão independente — está documentado em
-[`plan.md`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/plan.md) e
-[`roadmap.md`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/roadmap.md) do projeto
-consumidor, [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab).
+70 casos em `InertiaRendererTest` cobrem tudo isso (`./gradlew :inertia4j.core:test`). Detalhes de
+design de cada recurso estão em [`plan.md`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/plan.md)
+e [`roadmap.md`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/roadmap.md), no projeto
+consumidor [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab).
 
 ## Frameworks suportados
 
-| Framework | Status | Módulo |
-|---|---|---|
-| **Quarkus** | 🎯 foco ativo deste fork | [`inertia4j.quarkus`](/inertia4j.quarkus) — CDI (`Inertia`, `InertiaShared`, `InertiaFlash`), sessão Vert.x/Redis, mapper de validação, template renderer ciente do Quinoa |
-| Spring | mantido, herdado do projeto original | [`inertia4j.spring`](/inertia4j.spring/README.md) |
-| Ktor | mantido, herdado do projeto original | [`inertia4j.ktor`](/inertia4j.ktor/README.md) |
-
-Spring e Ktor continuam no repositório e recebem de graça todas as correções de protocolo do
-`inertia4j-core` (nenhuma delas é específica de framework) — mas não são o foco de desenvolvimento
-ativo, que é o núcleo do protocolo e o adapter Quarkus.
+| Framework | Módulo |
+|---|---|
+| Quarkus | [`inertia4j.quarkus`](/inertia4j.quarkus) — CDI (`Inertia`, `InertiaShared`, `InertiaFlash`), sessão Vert.x/Redis, mapper de validação, template renderer ciente do Quinoa |
+| Spring | [`inertia4j.spring`](/inertia4j.spring/README.md) |
+| Ktor | [`inertia4j.ktor`](/inertia4j.ktor/README.md) |
 
 `inertia4j.quarkus` fornece a infraestrutura genérica (o bean `Inertia`, sessão, validação,
-`sharedProps`, flash); o que cada app compartilha de fato — o equivalente a sobrescrever
+`sharedProps`, flash). O que sua aplicação compartilha de fato — o equivalente a sobrescrever
 `HandleInertiaRequests::share()` — é responsabilidade do app, tipicamente um
-`ContainerRequestFilter` próprio (exemplo real:
+`ContainerRequestFilter` próprio (exemplo:
 [`InertiaSharedDataFilter`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/tarefas-inertia/src/main/java/io/github/inertia4j/quarkus/InertiaSharedDataFilter.java)
-em [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab), o projeto que usa este
-módulo como dependência e serve de demo ponta a ponta).
+em [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab)).
 
 ## Instalação
 
 Este fork **não é publicado no Maven Central** — publique localmente e aponte seu projeto pras
 mesmas coordenadas. Pra um app Quarkus, publique os três (`core`/`spi`/`quarkus`):
-
-**Sobre os números de versão** (2026-08-30): sem sufixo `-jakjr.N` — os três módulos usam versão
-"limpa" (`1.5.0`, `1.3.0`, `1.0.0`), igual a qualquer lib publicada de verdade. Enquanto um recurso
-está em desenvolvimento ativo, a versão vira `X.Y.Z-SNAPSHOT` (cada `publishToMavenLocal` sobrescreve
-o `.jar` local, sem precisar bumpar nada) — só volta a um número redondo quando o trabalho é
-consolidado. Isso existe pra não ter que atualizar a seção de instalação (aqui embaixo) a cada
-commit — só quando uma versão de verdade sai.
 
 ```bash
 ./gradlew :inertia4j.core:publishToMavenLocal :inertia4j.spi:publishToMavenLocal :inertia4j.quarkus:publishToMavenLocal
@@ -103,9 +79,9 @@ se usar os prop types (`DeferProp`, `MergeProp`, `ScrollProp`, etc.) nos seus pr
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("io.github.inertia4j:inertia4j-quarkus:1.0.0")
-    implementation("io.github.inertia4j:inertia4j-core:1.5.0")
-    implementation("io.github.inertia4j:inertia4j-spi:1.3.0")
+    implementation("io.github.inertia4j:inertia4j-quarkus:1.0.0-SNAPSHOT")
+    implementation("io.github.inertia4j:inertia4j-core:1.5.0-SNAPSHOT")
+    implementation("io.github.inertia4j:inertia4j-spi:1.3.0-SNAPSHOT")
 }
 ```
 
@@ -114,19 +90,22 @@ dependencies {
 <dependency>
     <groupId>io.github.inertia4j</groupId>
     <artifactId>inertia4j-quarkus</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.0-SNAPSHOT</version>
 </dependency>
 <dependency>
     <groupId>io.github.inertia4j</groupId>
     <artifactId>inertia4j-core</artifactId>
-    <version>1.5.0</version>
+    <version>1.5.0-SNAPSHOT</version>
 </dependency>
 <dependency>
     <groupId>io.github.inertia4j</groupId>
     <artifactId>inertia4j-spi</artifactId>
-    <version>1.3.0</version>
+    <version>1.3.0-SNAPSHOT</version>
 </dependency>
 ```
+
+Uma versão terminada em `-SNAPSHOT` está em desenvolvimento ativo e pode mudar de comportamento
+entre publicações; prefira um número sem sufixo (release) quando disponível.
 
 `inertia4j.quarkus` declara as dependências do Quarkus (`quarkus-arc`, `quarkus-rest`,
 `quarkus-vertx`, `quarkus-hibernate-validator`, `quarkus-redis-client`,
@@ -136,20 +115,14 @@ conflitantes na classpath.
 
 ## Desenvolvimento local (editando a lib e um app consumidor ao mesmo tempo)
 
-Se você forkar este repo (ou só quiser evoluir a lib enquanto testa contra seu próprio app
-Quarkus), vai esbarrar num problema real: `quarkus:dev` **não** detecta sozinho quando um `.jar` de
-dependência muda no `~/.m2` — é preciso republicar (`publishToMavenLocal`) e reiniciar o
-`quarkus:dev` a cada alteração na lib
-([limitação documentada do Quarkus](https://github.com/quarkusio/quarkus/issues/27242), não falta
-de configuração). Isso é lento pra iterar em par com um app consumidor, especialmente quando os
-dois vivem em repositórios separados como aqui.
+`quarkus:dev` não detecta sozinho quando um `.jar` de dependência muda no `~/.m2` — é preciso
+republicar (`publishToMavenLocal`) e reiniciar o `quarkus:dev` a cada alteração na lib
+([limitação documentada do Quarkus](https://github.com/quarkusio/quarkus/issues/27242)).
 
-**A solução (testada de ponta a ponta neste projeto — não é teoria)**: no `pom.xml` do app
-consumidor, adicione um profile Maven opt-in que compila `inertia4j.spi`/`core`/`quarkus` direto do
-código-fonte do checkout deste repo, como source roots extras do próprio módulo do app — sem
-`.jar`, sem publish nenhum. Como vira a mesma unidade de compilação do app, o live reload do
-`quarkus:dev` trata uma mudança na lib exatamente como mudança local, sem restart (confirmado: o
-`RuntimeUpdatesProcessor` do Quarkus loga o reload normalmente).
+Alternativa: no `pom.xml` do app consumidor, um profile Maven opt-in compilando
+`inertia4j.spi`/`core`/`quarkus` direto do código-fonte deste repo, como source roots extras do
+próprio módulo do app — sem `.jar`, sem publish. Como vira a mesma unidade de compilação do app, o
+live reload do `quarkus:dev` trata uma mudança na lib como mudança local, sem restart.
 
 ```xml
 <!-- pom.xml do app consumidor -->
@@ -183,23 +156,21 @@ código-fonte do checkout deste repo, como source roots extras do próprio módu
 </profiles>
 ```
 
-Ative com `./mvnw -Plocal-inertia4j quarkus:dev`. Importante: as três dependências
+Ative com `./mvnw -Plocal-inertia4j quarkus:dev`. As três dependências
 `io.github.inertia4j:inertia4j-{core,spi,quarkus}` **não podem estar declaradas** nesse profile (ou
 em qualquer lugar ativo junto com ele) — ter a classe simultaneamente como fonte compilada e dentro
-de um `.jar` no classpath é receita pra um `.jar` desatualizado silenciosamente ganhar de uma
-versão mais nova. A forma mais simples de garantir isso: mova essas três dependências pra dentro de
-um segundo profile (`activeByDefault=true`), mutuamente exclusivo com `local-inertia4j` — o Maven
-desativa sozinho um profile `activeByDefault` assim que outro é pedido na linha de comando. Exemplo
-completo, testado e funcionando, no
+de um `.jar` no classpath arrisca um `.jar` desatualizado ganhar de uma versão mais nova. A forma
+mais simples de garantir isso: mova essas três dependências pra dentro de um segundo profile
+(`activeByDefault=true`), mutuamente exclusivo com `local-inertia4j` — o Maven desativa sozinho um
+profile `activeByDefault` assim que outro é pedido na linha de comando. Exemplo completo no
 [`pom.xml`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/tarefas-inertia/pom.xml) do
-`quarkus-inertia-lab` (profiles `published-inertia4j`/`local-inertia4j`) — copie a estrutura de lá.
+`quarkus-inertia-lab` (profiles `published-inertia4j`/`local-inertia4j`).
 
-Isso é específico de Maven; se seu app consumidor for Gradle, o equivalente nativo é um
+Pra um app consumidor Gradle, o equivalente é um
 [composite build](https://docs.gradle.org/current/userguide/composite_builds.html)
-(`includeBuild("../inertia4j")`) — o Quarkus tem suporte a live-reload de composite builds, mas
-há issues abertas específicas desse caminho (conflito de classloader quando o build incluído
-compartilha uma dependência com o projeto principal, entre outras) — menos testado em produção do
-que a rota Maven acima.
+(`includeBuild("../inertia4j")`). O Quarkus suporta live-reload de composite builds, mas há issues
+abertas específicas desse caminho, incluindo conflito de classloader quando o build incluído
+compartilha uma dependência com o projeto principal.
 
 ## Rodando os testes
 

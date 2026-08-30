@@ -14,7 +14,7 @@ java {
 }
 
 group = "io.github.inertia4j"
-version = "1.3.0"
+version = "1.3.0-SNAPSHOT"
 
 dependencies {
     api("org.jspecify:jspecify:1.0.0")
