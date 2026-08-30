@@ -64,7 +64,7 @@ consumidor, [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab
 
 | Framework | Status | Módulo |
 |---|---|---|
-| **Quarkus** | 🎯 foco ativo deste fork | adapter em [`jakjr/quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab) (`io.github.inertia4j.quarkus`) — não vive neste repo, consome `inertia4j-core` |
+| **Quarkus** | 🎯 foco ativo deste fork | [`inertia4j.quarkus`](/inertia4j.quarkus) — CDI (`Inertia`, `InertiaShared`, `InertiaFlash`), sessão Vert.x/Redis, mapper de validação, template renderer ciente do Quinoa |
 | Spring | mantido, herdado do projeto original | [`inertia4j.spring`](/inertia4j.spring/README.md) |
 | Ktor | mantido, herdado do projeto original | [`inertia4j.ktor`](/inertia4j.ktor/README.md) |
 
@@ -72,21 +72,31 @@ Spring e Ktor continuam no repositório e recebem de graça todas as correções
 `inertia4j-core` (nenhuma delas é específica de framework) — mas não são o foco de desenvolvimento
 ativo, que é o núcleo do protocolo e o adapter Quarkus.
 
+`inertia4j.quarkus` fornece a infraestrutura genérica (o bean `Inertia`, sessão, validação,
+`sharedProps`, flash); o que cada app compartilha de fato — o equivalente a sobrescrever
+`HandleInertiaRequests::share()` — é responsabilidade do app, tipicamente um
+`ContainerRequestFilter` próprio (exemplo real:
+[`InertiaSharedDataFilter`](https://github.com/jakjr/quarkus-inertia-lab/blob/main/tarefas-inertia/src/main/java/io/github/inertia4j/quarkus/InertiaSharedDataFilter.java)
+em [`quarkus-inertia-lab`](https://github.com/jakjr/quarkus-inertia-lab), o projeto que usa este
+módulo como dependência e serve de demo ponta a ponta).
+
 ## Instalação
 
 Este fork **não é publicado no Maven Central** — publique localmente e aponte seu projeto pras
-mesmas coordenadas:
+mesmas coordenadas. Pra um app Quarkus, publique os três (`core`/`spi`/`quarkus`):
 
 ```bash
-./gradlew :inertia4j.core:publishToMavenLocal :inertia4j.spi:publishToMavenLocal
+./gradlew :inertia4j.core:publishToMavenLocal :inertia4j.spi:publishToMavenLocal :inertia4j.quarkus:publishToMavenLocal
 ```
 
-`inertia4j-spi` (tipos como `PageObject`) precisa ser declarado à parte — `inertia4j-core` não o
-expõe transitivamente:
+Declare os três diretamente — `inertia4j-quarkus` traz `inertia4j-core` só em tempo de execução
+(não no classpath de compilação de quem o consome), e você vai precisar de `core`/`spi` diretamente
+se usar os prop types (`DeferProp`, `MergeProp`, `ScrollProp`, etc.) nos seus próprios Resources:
 
 ```kotlin
 // build.gradle.kts
 dependencies {
+    implementation("io.github.inertia4j:inertia4j-quarkus:1.0.0-jakjr.1")
     implementation("io.github.inertia4j:inertia4j-core:1.5.0-jakjr.1")
     implementation("io.github.inertia4j:inertia4j-spi:1.3.0-jakjr.1")
 }
@@ -94,6 +104,11 @@ dependencies {
 
 ```xml
 <!-- pom.xml -->
+<dependency>
+    <groupId>io.github.inertia4j</groupId>
+    <artifactId>inertia4j-quarkus</artifactId>
+    <version>1.0.0-jakjr.1</version>
+</dependency>
 <dependency>
     <groupId>io.github.inertia4j</groupId>
     <artifactId>inertia4j-core</artifactId>
@@ -105,6 +120,12 @@ dependencies {
     <version>1.3.0-jakjr.1</version>
 </dependency>
 ```
+
+`inertia4j.quarkus` declara as dependências do Quarkus (`quarkus-arc`, `quarkus-rest`,
+`quarkus-vertx`, `quarkus-hibernate-validator`, `quarkus-redis-client`,
+`io.vertx:vertx-web-sstore-redis`) como `compileOnly` — seu app, que já é um app Quarkus, precisa
+declará-las diretamente (na versão do BOM que seu app escolher), pra evitar duas cópias
+conflitantes na classpath.
 
 ## Rodando os testes
 
